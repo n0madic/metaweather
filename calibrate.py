@@ -194,7 +194,7 @@ def append_log(timestamp: str, real_temp: float, readings: dict, current_w: dict
     """Append one row to calibration_log.csv."""
     file_exists = LOG_FILE.exists() and LOG_FILE.stat().st_size > 0
 
-    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys()) + [k for k in API_KEY_SOURCES if readings.get(k) is not None or k in current_weights]
+    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys()) + [k for k in API_KEY_SOURCES if readings.get(k) is not None or k in current_w]
     fieldnames = ["timestamp", "real_temp"]
     for k in all_keys:
         fieldnames.extend([f"{k}_temp", f"{k}_error", f"{k}_weight_current", f"{k}_weight_suggested"])
