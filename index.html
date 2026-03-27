@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://api.open-meteo.com https://wttr.in https://api.met.no https://api.tomorrow.io https://api.openweathermap.org; img-src 'self' data:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://api.open-meteo.com https://wttr.in https://api.met.no https://api.tomorrow.io https://api.openweathermap.org https://cdn.jsdelivr.net; img-src 'self' data:;">
 <title>MetaWeather — Multi-Model Weather Aggregator</title>
 <meta name="theme-color" content="#0F172A">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1387,7 +1387,41 @@ function chartData(agg) {
   return agg.chart.slice(0, maxHours);
 }
 
+const nowLinePlugin = {
+  id: "nowLine",
+  afterDraw(chart) {
+    const labels = chart.data.labels;
+    if (!labels?.length) return;
+    const now = new Date();
+    const nowKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}T${String(now.getHours()).padStart(2,"0")}:00`;
+    // Find the two labels surrounding now for interpolation
+    let idx = -1;
+    for (let i = 0; i < labels.length - 1; i++) {
+      if (labels[i] <= nowKey && nowKey < labels[i + 1]) { idx = i; break; }
+    }
+    if (idx < 0) return;
+    const xScale = chart.scales.x;
+    const t0 = new Date(labels[idx]).getTime();
+    const t1 = new Date(labels[idx + 1]).getTime();
+    const frac = (now.getTime() - t0) / (t1 - t0);
+    const x0 = xScale.getPixelForValue(idx);
+    const x1 = xScale.getPixelForValue(idx + 1);
+    const x = x0 + frac * (x1 - x0);
+    const { top, bottom } = chart.chartArea;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(251,191,36,0.3)";
+    ctx.lineWidth = 1.5;
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
 function buildChart(agg) {
+  if (!nowLinePlugin._registered) { Chart.register(nowLinePlugin); nowLinePlugin._registered = true; }
   const ctx = document.getElementById("main-chart").getContext("2d");
   const data = chartData(agg);
   const labels = data.map(d => d.time);
@@ -1465,6 +1499,7 @@ function buildChart(agg) {
         intersect: false,
       },
       plugins: {
+        nowLine: true,
         legend: { display: false },
         tooltip: {
           backgroundColor: "rgba(8,15,30,0.96)",
@@ -1841,8 +1876,8 @@ function renderFooter() {
   html += `<div class="footer-divider">${t("agg_desc")}</div>`;
   html += `<div class="footer-powered">
     ${t("powered_by")} <a href="https://open-meteo.com" target="_blank" rel="noreferrer">Open-Meteo.com</a>,
-    <a href="https://api.met.no" target="_blank" rel="noreferrer">MET Norway</a>
-    & <a href="https://wttr.in" target="_blank" rel="noreferrer">wttr.in</a>`;
+    <a href="https://api.met.no" target="_blank" rel="noreferrer">MET Norway</a>,
+    <a href="https://wttr.in" target="_blank" rel="noreferrer">wttr.in</a>`;
   if (getApiKey("tomorrow")) html += `, <a href="https://www.tomorrow.io" target="_blank" rel="noreferrer">Tomorrow.io</a>`;
   if (getApiKey("owm")) html += `, <a href="https://openweathermap.org" target="_blank" rel="noreferrer">OpenWeatherMap</a>`;
   html += `<a href="https://github.com/n0madic/metaweather" target="_blank" rel="noreferrer" style="margin-left:auto">GitHub</a>
