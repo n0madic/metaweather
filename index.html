@@ -1067,6 +1067,8 @@ function toggleSource(key, badge) {
   }
   badge.classList.toggle("disabled", disabledSources.has(key));
   localStorage.setItem("mw_disabled", JSON.stringify([...disabledSources]));
+  const legendEl = document.querySelector(`.legend-source[data-source="${key}"]`);
+  if (legendEl) legendEl.style.display = disabledSources.has(key) ? "none" : "";
   reaggregate();
 }
 
@@ -1104,6 +1106,11 @@ function toggleModels() {
   const btn = document.getElementById("chart-toggle");
   btn.textContent = showModels ? "Hide models" : "Show models";
   btn.classList.toggle("active", showModels);
+
+  // Toggle legend items
+  document.querySelectorAll(".legend-source").forEach(el => {
+    el.style.display = (!showModels || disabledSources.has(el.dataset.source)) ? "none" : "";
+  });
 
   if (!mainChart) return;
   for (const ds of mainChart.data.datasets) {
@@ -1221,7 +1228,9 @@ function renderChartLegend(agg) {
   for (const k of agg.modelKeys) {
     const cfg = getSourceConfig(k);
     const item = document.createElement("span");
-    item.className = "legend-item hoverable";
+    item.className = "legend-item hoverable legend-source";
+    item.dataset.source = k;
+    if (!showModels || disabledSources.has(k)) item.style.display = "none";
     item.innerHTML = `<span class="legend-dash" style="border-color:${cfg.color}"></span> ${cfg.name}`;
     item.addEventListener("mouseenter", () => highlightSource(k, true));
     item.addEventListener("mouseleave", () => highlightSource(k, false));
