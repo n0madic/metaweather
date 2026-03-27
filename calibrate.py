@@ -58,10 +58,28 @@ def detect_location() -> tuple[float, float, str]:
 
 
 def fetch_open_meteo(cfg: dict, lat: float, lon: float) -> float | None:
-    url = f"{cfg['endpoint']}?latitude={lat}&longitude={lon}&current=temperature_2m&wind_speed_unit=ms&timezone=auto"
+    url = f"{cfg['endpoint']}?latitude={lat}&longitude={lon}&current=temperature_2m&hourly=temperature_2m&wind_speed_unit=ms&timezone=auto&forecast_days=1"
     try:
         data = json.loads(urllib.request.urlopen(url, timeout=10).read())
-        return data.get("current", {}).get("temperature_2m")
+        # Try current first
+        temp = data.get("current", {}).get("temperature_2m")
+        if temp is not None:
+            return temp
+        # Fallback: nearest hourly point to now
+        hourly = data.get("hourly", {})
+        times = hourly.get("time", [])
+        temps = hourly.get("temperature_2m", [])
+        if not times:
+            return None
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:")
+        for i, t in enumerate(times):
+            if t >= now and temps[i] is not None:
+                return temps[i]
+        # If all future points exhausted, use last available
+        for t in reversed(temps):
+            if t is not None:
+                return t
+        return None
     except (URLError, json.JSONDecodeError, KeyError, ValueError, OSError):
         return None
 
