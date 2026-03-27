@@ -189,6 +189,16 @@
     margin-bottom: 6px; flex-wrap: wrap; gap: 8px;
   }
   .chart-header h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .days-toggle {
+    display: flex; font-size: 11px; border-radius: 8px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .days-toggle span {
+    padding: 3px 9px; cursor: pointer; transition: all 0.15s;
+    background: rgba(255,255,255,0.03); color: var(--text-dim);
+  }
+  .days-toggle span.active { background: rgba(255,255,255,0.08); color: var(--text-secondary); }
+  .days-toggle span:not(.active):hover { background: rgba(255,255,255,0.06); }
   .chart-toggle {
     font-size: 11px; padding: 3px 11px; border-radius: 8px;
     background: rgba(255,255,255,0.03); color: var(--text-dim);
@@ -313,7 +323,13 @@
     <section class="chart-section">
       <div class="chart-header">
         <h2>Temperature & Precipitation</h2>
-        <button class="chart-toggle active" id="chart-toggle" onclick="toggleModels()">Hide models</button>
+        <div style="display:flex;gap:4px">
+          <div class="days-toggle" id="days-toggle">
+            <span data-days="3" onclick="setChartDays(3)">3d</span>
+            <span class="active" data-days="5" onclick="setChartDays(5)">5d</span>
+          </div>
+          <button class="chart-toggle active" id="chart-toggle" onclick="toggleModels()">Hide models</button>
+        </div>
       </div>
       <div class="chart-canvas">
         <canvas id="main-chart"></canvas>
@@ -1036,11 +1052,17 @@ const disabledSources = new Set(JSON.parse(localStorage.getItem("mw_disabled") |
 
 // ── Chart ────────────────────────────────────────────────────────────
 let mainChart = null;
-let showModels = true;
+let showModels = localStorage.getItem("mw_show_models") !== "false";
+let chartDays = parseInt(localStorage.getItem("mw_chart_days")) || 5;
+
+function chartData(agg) {
+  const maxHours = chartDays * 24 / 3; // chart is every 3rd hour
+  return agg.chart.slice(0, maxHours);
+}
 
 function buildChart(agg) {
   const ctx = document.getElementById("main-chart").getContext("2d");
-  const data = agg.chart;
+  const data = chartData(agg);
   const labels = data.map(d => d.time);
 
   const datasets = [];
@@ -1198,6 +1220,17 @@ function buildChart(agg) {
   });
 }
 
+function setChartDays(days) {
+  chartDays = days;
+  localStorage.setItem("mw_chart_days", days);
+  document.querySelectorAll("#days-toggle span").forEach(el => {
+    el.classList.toggle("active", parseInt(el.dataset.days) === days);
+  });
+  if (!gOpenMeteoResults) return;
+  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (agg) buildChart(agg);
+}
+
 function toggleSource(key, badge) {
   if (!gOpenMeteoResults) return;
   if (disabledSources.has(key)) {
@@ -1223,7 +1256,7 @@ function reaggregate() {
 
 function updateChartData(agg) {
   if (!mainChart) { buildChart(agg); return; }
-  const data = agg.chart;
+  const data = chartData(agg);
   for (const ds of mainChart.data.datasets) {
     if (ds.label === "Aggregated") {
       ds.data = data.map(d => toDisplay(d.temp_agg));
@@ -1243,6 +1276,7 @@ function updateChartData(agg) {
 
 function toggleModels() {
   showModels = !showModels;
+  localStorage.setItem("mw_show_models", showModels);
   const btn = document.getElementById("chart-toggle");
   btn.textContent = showModels ? t("hide_models") : t("show_models");
   btn.classList.toggle("active", showModels);
@@ -1539,11 +1573,18 @@ async function main() {
   document.getElementById("loader").style.display = "none";
   document.getElementById("app").style.display = "block";
 
-  // Apply saved unit preference to toggle UI
+  // Apply saved preferences to UI
   if (useFahrenheit) {
     document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
       el.classList.toggle("active", el.dataset.unit === "F");
     });
+  }
+  document.querySelectorAll("#days-toggle span").forEach(el => {
+    el.classList.toggle("active", parseInt(el.dataset.days) === chartDays);
+  });
+  if (!showModels) {
+    document.getElementById("chart-toggle").textContent = t("show_models");
+    document.getElementById("chart-toggle").classList.remove("active");
   }
 
   renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
