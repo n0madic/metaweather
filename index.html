@@ -1351,25 +1351,30 @@ async function refresh() {
 async function main() {
   const setStage = (s) => { document.getElementById("loader-stage").textContent = s; };
 
-  // Get location
-  let loc;
-  try {
-    loc = await new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        resolve({ lat: 50.4501, lon: 30.5234 });
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
-        () => resolve({ lat: 50.4501, lon: 30.5234 }),
-        { timeout: 8000 }
-      );
-    });
-  } catch {
-    loc = { lat: 50.4501, lon: 30.5234 };
+  // Get location: use short-lived cache (30 min), then re-detect
+  const FALLBACK = { lat: 50.4501, lon: 30.5234 };
+  const LOC_TTL = 30 * 60 * 1000; // 30 minutes
+  const cachedRaw = localStorage.getItem("mw_loc");
+  const cached = cachedRaw ? JSON.parse(cachedRaw) : null;
+  let loc = (cached && Date.now() - cached.ts < LOC_TTL) ? cached : null;
+
+  if (!loc) {
+    try {
+      loc = await new Promise((resolve) => {
+        if (!navigator.geolocation) { resolve(FALLBACK); return; }
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          () => resolve(FALLBACK),
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 600000 }
+        );
+      });
+    } catch {
+      loc = FALLBACK;
+    }
+    localStorage.setItem("mw_loc", JSON.stringify({ ...loc, ts: Date.now() }));
   }
 
-  setStage("Querying 5 models + MET Norway + wttr.in\u2026");
+  setStage("Querying forecasts\u2026");
 
   // Fetch all sources in parallel
   const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
