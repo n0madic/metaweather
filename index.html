@@ -897,6 +897,8 @@ function setUnit(u) {
 }
 
 // ── Global State (for reaggregation) ─────────────────────────────────
+let lastFetchTime = 0;
+const STALE_MS = 60 * 60 * 1000; // 1 hour
 let gOpenMeteoResults = null;
 let gWttrResult = null;
 let gMetNorwayResult = null;
@@ -1335,6 +1337,7 @@ async function refresh() {
   gOpenMeteoResults = openMeteoResults;
   gWttrResult = wttrResult;
   gMetNorwayResult = metNorwayResult;
+  lastFetchTime = Date.now();
 
   const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources);
   if (agg) {
@@ -1392,6 +1395,7 @@ async function main() {
   gWttrResult = wttrResult;
   gMetNorwayResult = metNorwayResult;
   gLoc = loc;
+  lastFetchTime = Date.now();
 
   const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult);
   if (!agg) {
@@ -1430,6 +1434,13 @@ document.addEventListener("touchstart", (e) => {
     mainChart.setActiveElements([]);
     mainChart.tooltip.setActiveElements([], { x: 0, y: 0 });
     mainChart.update("none");
+  }
+});
+
+// Auto-refresh when returning to app after 1+ hour
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && lastFetchTime && Date.now() - lastFetchTime > STALE_MS) {
+    refresh();
   }
 });
 
