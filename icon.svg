@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0F172A"/>
+  <circle cx="200" cy="200" r="64" fill="#FBBF24"/>
+  <circle cx="200" cy="200" r="48" fill="#FCD34D"/>
+  <!-- sun rays -->
+  <g stroke="#FBBF24" stroke-width="8" stroke-linecap="round">
+    <line x1="200" y1="115" x2="200" y2="95"/>
+    <line x1="200" y1="285" x2="200" y2="305"/>
+    <line x1="115" y1="200" x2="95" y2="200"/>
+    <line x1="285" y1="200" x2="305" y2="200"/>
+    <line x1="140" y1="140" x2="126" y2="126"/>
+    <line x1="260" y1="260" x2="274" y2="274"/>
+    <line x1="140" y1="260" x2="126" y2="274"/>
+    <line x1="260" y1="140" x2="274" y2="126"/>
+  </g>
+  <!-- cloud -->
+  <g fill="#E2E8F0">
+    <circle cx="300" cy="280" r="56"/>
+    <circle cx="360" cy="280" r="44"/>
+    <circle cx="260" cy="290" r="40"/>
+    <rect x="260" y="280" width="100" height="56" rx="4"/>
+  </g>
+  <!-- rain drops -->
+  <g fill="#38BDF8" opacity="0.8">
+    <ellipse cx="280" cy="370" rx="6" ry="10"/>
+    <ellipse cx="310" cy="385" rx="6" ry="10"/>
+    <ellipse cx="340" cy="370" rx="6" ry="10"/>
+  </g>
+  <!-- chart line -->
+  <polyline points="60,420 130,390 200,400 270,370 340,385 410,360 450,380"
+    fill="none" stroke="#F8FAFC" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
