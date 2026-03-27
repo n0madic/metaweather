@@ -1228,7 +1228,10 @@ function setChartDays(days) {
   });
   if (!gOpenMeteoResults) return;
   const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
-  if (agg) buildChart(agg);
+  if (agg) {
+    buildChart(agg);
+    renderDaily(agg.daily);
+  }
 }
 
 function toggleSource(key, badge) {
@@ -1438,7 +1441,7 @@ function highlightSource(key, on) {
 
 function renderDaily(daily) {
   const grid = document.getElementById("daily-grid");
-  grid.innerHTML = daily.map((d, i) => {
+  grid.innerHTML = daily.slice(0, chartDays).map((d, i) => {
     const w = getWmo(d.weather_code);
     const today = i === 0;
     return `
