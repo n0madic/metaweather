@@ -6,6 +6,8 @@ Multi-model weather aggregator that combines forecasts from 7 independent source
 
 **[nomadic.name/metaweather](https://nomadic.name/metaweather/)**
 
+Installable as a PWA — add to home screen on mobile for a native app-like experience.
+
 ## Sources
 
 | Source | Type | Description |
@@ -18,6 +20,8 @@ Multi-model weather aggregator that combines forecasts from 7 independent source
 | NOAA GFS | Open-Meteo | US Weather Service, 25km global |
 | wttr.in | Independent | World Weather Online |
 
+Source weights are calibrated against real measurements using `calibrate.py`.
+
 ## Aggregation Algorithm
 
 - **Temperature**: agreement-aware weighted mean — outliers near the weighted median are dampened using Gaussian falloff based on MAD (median absolute deviation)
@@ -29,17 +33,20 @@ Multi-model weather aggregator that combines forecasts from 7 independent source
 ## Features
 
 - Auto-detects location via browser geolocation
-- Current conditions with per-source breakdown
-- Interactive 5-day temperature & precipitation chart
-- Toggle individual sources on/off (recalculates aggregated forecast)
+- Current conditions with per-source breakdown and confidence score
+- Interactive 5-day temperature & precipitation chart (Chart.js)
+- Toggle individual sources on/off via header badges (recalculates aggregated forecast)
 - Hover chart legend to highlight source lines
 - Celsius / Fahrenheit toggle
+- Refresh button — re-fetches all sources without page reload
+- Settings persisted in localStorage (disabled sources, temperature unit)
+- PWA — installable on mobile, standalone mode, service worker caching
 - No API keys required — all sources are free and open
 
 ## Calibration
 
 ```
-python3 calibrate.py 17.5                          # auto-detect location
+python3 calibrate.py 17.5                          # auto-detect location via IP
 python3 calibrate.py 17.5 --lat 50.34 --lon 30.32  # explicit coordinates
 ```
 
