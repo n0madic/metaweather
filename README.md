@@ -1,6 +1,6 @@
 # MetaWeather
 
-Multi-model weather aggregator that combines forecasts from 7 independent sources into a single, more reliable prediction using weighted ensemble averaging with outlier dampening.
+Multi-model weather aggregator that combines forecasts from up to 9 independent sources into a single, more reliable prediction using weighted ensemble averaging with outlier dampening.
 
 ## Live Demo
 
@@ -19,6 +19,10 @@ Installable as a PWA — add to home screen on mobile for a native app-like expe
 | ECMWF IFS | Open-Meteo | European Centre, 9km global |
 | NOAA GFS | Open-Meteo | US Weather Service, 25km global |
 | wttr.in | Independent | World Weather Online |
+| Tomorrow.io | API key | High-resolution global forecast (optional) |
+| OpenWeatherMap | API key | 3-hour global forecast (optional) |
+
+Default sources work without API keys. Tomorrow.io and OpenWeatherMap can be added via the settings button (gear icon in the header) by providing free API keys.
 
 Source weights are calibrated against real measurements using `calibrate.py`.
 
@@ -39,9 +43,9 @@ Source weights are calibrated against real measurements using `calibrate.py`.
 - Hover chart legend to highlight source lines
 - Celsius / Fahrenheit toggle
 - Refresh button — re-fetches all sources without page reload
-- Settings persisted in localStorage (disabled sources, temperature unit)
+- Settings persisted in localStorage (disabled sources, temperature unit, API keys)
+- API settings modal — add optional Tomorrow.io and OpenWeatherMap API keys for extra sources
 - PWA — installable on mobile, standalone mode, service worker caching
-- No API keys required — all sources are free and open
 
 ## Calibration
 
