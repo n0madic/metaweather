@@ -247,8 +247,8 @@
     line-height: 1.8;
   }
   .footer-title { font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
-  .footer-model { display: flex; align-items: center; gap: 6px; }
-  .footer-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .footer-model { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .footer-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; position: relative; top: -1px; }
   .footer-divider { margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 6px; color: var(--text-faint); }
   .footer-powered { margin-top: 4px; color: var(--text-dim); }
   .footer-powered a { color: var(--accent-blue); text-decoration: none; }
@@ -1433,7 +1433,7 @@ function renderFooter() {
   for (const m of allSrc) {
     html += `<div class="footer-model">
       <span class="footer-dot" style="background:${m.color}"></span>
-      <b style="color:${m.color}">${m.name}</b> \u2014 ${m.desc} \u2014 weight ${m.weight}
+      <b style="color:${m.color}">${m.name}</b> \u2014 ${m.desc}
     </div>`;
   }
   html += `<div class="footer-divider">${t("agg_desc")}</div>`;
