@@ -52,6 +52,9 @@ Source weights are calibrated against real measurements using `calibrate.py`.
 ```
 python3 calibrate.py 17.5                          # auto-detect location via IP
 python3 calibrate.py 17.5 --lat 50.34 --lon 30.32  # explicit coordinates
+
+# Include API-key sources via environment variables:
+TOMORROW_IO_API_KEY=... OWM_API_KEY=... python3 calibrate.py 17.5
 ```
 
 Compares real temperature against all sources, suggests weight corrections, and logs results to `calibration_log.csv` for tracking accuracy over time.

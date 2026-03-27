@@ -14,6 +14,7 @@ to calibration_log.csv for tracking over time.
 import argparse
 import json
 import math
+import os
 import csv
 import urllib.request
 from datetime import datetime, timezone
@@ -34,6 +35,12 @@ SOURCES = {
 INDEPENDENT = {
     "wttr":       {"name": "wttr.in",    "weight": 0.45},
     "met_norway": {"name": "MET Norway", "weight": 1.0},
+}
+
+# API-key sources (keys via env: TOMORROW_IO_API_KEY, OWM_API_KEY)
+API_KEY_SOURCES = {
+    "tomorrow_io": {"name": "Tomorrow.io",      "weight": 0.7},
+    "owm":         {"name": "OpenWeatherMap",    "weight": 0.55},
 }
 
 FALLBACK_LAT = 50.4501  # Kyiv
@@ -103,6 +110,30 @@ def fetch_met_norway(lat: float, lon: float) -> float | None:
         return None
 
 
+def fetch_tomorrow_io(lat: float, lon: float, api_key: str) -> float | None:
+    url = f"https://api.tomorrow.io/v4/weather/forecast?location={lat},{lon}&apikey={api_key}&timesteps=1h&units=metric"
+    try:
+        data = json.loads(urllib.request.urlopen(url, timeout=10).read())
+        hourly = data.get("timelines", {}).get("hourly", [])
+        if hourly:
+            return hourly[0]["values"]["temperature"]
+        return None
+    except (URLError, json.JSONDecodeError, KeyError, ValueError, OSError):
+        return None
+
+
+def fetch_owm(lat: float, lon: float, api_key: str) -> float | None:
+    url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={api_key}&units=metric"
+    try:
+        data = json.loads(urllib.request.urlopen(url, timeout=10).read())
+        lst = data.get("list", [])
+        if lst:
+            return lst[0]["main"]["temp"]
+        return None
+    except (URLError, json.JSONDecodeError, KeyError, ValueError, OSError):
+        return None
+
+
 def smart_mean(values: list[float], weights: list[float]) -> tuple[float, float]:
     """Agreement-aware weighted mean. Returns (value, confidence)."""
     if not values:
@@ -163,7 +194,7 @@ def append_log(timestamp: str, real_temp: float, readings: dict, current_w: dict
     """Append one row to calibration_log.csv."""
     file_exists = LOG_FILE.exists() and LOG_FILE.stat().st_size > 0
 
-    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys())
+    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys()) + [k for k in API_KEY_SOURCES if readings.get(k) is not None or k in current_weights]
     fieldnames = ["timestamp", "real_temp"]
     for k in all_keys:
         fieldnames.extend([f"{k}_temp", f"{k}_error", f"{k}_weight_current", f"{k}_weight_suggested"])
@@ -244,9 +275,29 @@ def main():
     readings["met_norway"] = temp
     print(f"  {'MET Norway':15s}  {temp}°C" if temp is not None else f"  {'MET Norway':15s}  FAILED")
 
+    # API-key sources (from environment variables)
+    tomorrow_key = os.environ.get("TOMORROW_IO_API_KEY", "")
+    owm_key = os.environ.get("OWM_API_KEY", "")
+
+    if tomorrow_key:
+        temp = fetch_tomorrow_io(lat, lon, tomorrow_key)
+        readings["tomorrow_io"] = temp
+        print(f"  {'Tomorrow.io':15s}  {temp}°C" if temp is not None else f"  {'Tomorrow.io':15s}  FAILED")
+
+    if owm_key:
+        temp = fetch_owm(lat, lon, owm_key)
+        readings["owm"] = temp
+        print(f"  {'OpenWeatherMap':15s}  {temp}°C" if temp is not None else f"  {'OpenWeatherMap':15s}  FAILED")
+
+    if not tomorrow_key and not owm_key:
+        print("  (set TOMORROW_IO_API_KEY / OWM_API_KEY env vars to include API sources)")
+
     # Current weights
     current_weights = {k: v["weight"] for k, v in SOURCES.items()}
     current_weights.update({k: v["weight"] for k, v in INDEPENDENT.items()})
+    for k, v in API_KEY_SOURCES.items():
+        if k in readings:
+            current_weights[k] = v["weight"]
 
     # Suggested weights
     suggested = compute_suggested_weights(readings, current_weights, real)
@@ -265,8 +316,8 @@ def main():
     print(f"{'Source':15s} {'Temp':>7s} {'Error':>7s} {'Current W':>10s} {'Suggested W':>12s} {'Delta':>7s}")
     print("-" * 78)
 
-    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys())
-    all_names = {**{k: v["name"] for k, v in SOURCES.items()}, **{k: v["name"] for k, v in INDEPENDENT.items()}}
+    all_keys = list(SOURCES.keys()) + list(INDEPENDENT.keys()) + [k for k in API_KEY_SOURCES if readings.get(k) is not None or k in current_weights]
+    all_names = {**{k: v["name"] for k, v in SOURCES.items()}, **{k: v["name"] for k, v in INDEPENDENT.items()}, **{k: v["name"] for k, v in API_KEY_SOURCES.items()}}
 
     for key in all_keys:
         name = all_names[key]
