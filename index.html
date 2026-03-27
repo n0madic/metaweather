@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://api.open-meteo.com https://wttr.in https://api.met.no; img-src 'self' data:;">
 <title>MetaWeather — Multi-Model Weather Aggregator</title>
 <meta name="theme-color" content="#0F172A">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,7 +14,7 @@
 <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="favicon-16.png" sizes="16x16" type="image/png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
   :root {
     --bg-primary: #070D1A;
@@ -296,37 +297,43 @@
 <!-- Error Screen -->
 <div id="error-screen"></div>
 
+<noscript>
+  <div style="display:flex;min-height:100vh;align-items:center;justify-content:center;color:#94A3B8;font-size:18px;text-align:center;padding:20px;">
+    JavaScript is required to display weather data.
+  </div>
+</noscript>
+
 <!-- Main App -->
-<div id="app">
+<main id="app" role="main" aria-label="Weather forecast">
   <header>
     <div>
-      <h1 class="header-title" id="header-title"><span id="header-loc"></span><button class="refresh-btn" id="refresh-btn" onclick="refresh()">&#x21bb;</button><select class="lang-select" id="lang-select" onchange="setLang(this.value)"><option value="en">EN</option><option value="ru">RU</option><option value="uk">UK</option></select></h1>
+      <h1 class="header-title" id="header-title"><span id="header-loc"></span><button class="refresh-btn" id="refresh-btn" onclick="refresh()" aria-label="Refresh forecasts" title="Refresh forecasts">&#x21bb;</button><select class="lang-select" id="lang-select" onchange="setLang(this.value)"><option value="en">EN</option><option value="ru">RU</option><option value="uk">UK</option></select></h1>
       <div class="header-coords" id="header-coords"></div>
     </div>
     <div class="model-badges" id="model-badges"></div>
   </header>
 
   <div class="container">
-    <section class="hero" id="hero">
+    <section class="hero" id="hero" aria-label="Current weather">
       <div class="hero-icon">
         <div class="emoji" id="hero-emoji"></div>
         <div class="desc" id="hero-desc"></div>
       </div>
       <div class="hero-temp">
-        <div class="big"><span id="hero-temp-val"></span><div class="unit-toggle" id="unit-toggle"><span class="active" data-unit="C" onclick="setUnit('C')">C</span><span class="sep">&mdash;</span><span data-unit="F" onclick="setUnit('F')">F</span></div></div>
+        <div class="big"><span id="hero-temp-val"></span><div class="unit-toggle" id="unit-toggle" role="radiogroup" aria-label="Temperature unit"><span class="active" data-unit="C" role="radio" aria-checked="true" tabindex="0" onclick="setUnit('C')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setUnit('C')}">C</span><span class="sep">&mdash;</span><span data-unit="F" role="radio" aria-checked="false" tabindex="0" onclick="setUnit('F')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setUnit('F')}">F</span></div></div>
         <div class="feels" id="hero-feels"></div>
         <div class="hero-meta" id="hero-meta"></div>
       </div>
       <div class="tiles" id="tiles"></div>
     </section>
 
-    <section class="chart-section">
+    <section class="chart-section" aria-label="Temperature chart">
       <div class="chart-header">
         <h2>Temperature & Precipitation</h2>
         <div style="display:flex;gap:4px">
-          <div class="days-toggle" id="days-toggle">
-            <span data-days="3" onclick="setChartDays(3)">3d</span>
-            <span class="active" data-days="5" onclick="setChartDays(5)">5d</span>
+          <div class="days-toggle" id="days-toggle" role="radiogroup" aria-label="Chart days">
+            <span data-days="3" role="radio" aria-checked="false" tabindex="0" onclick="setChartDays(3)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setChartDays(3)}">3d</span>
+            <span class="active" data-days="5" role="radio" aria-checked="true" tabindex="0" onclick="setChartDays(5)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setChartDays(5)}">5d</span>
           </div>
           <button class="chart-toggle active" id="chart-toggle" onclick="toggleModels()">Hide models</button>
         </div>
@@ -337,16 +344,23 @@
       <div class="chart-legend" id="chart-legend"></div>
     </section>
 
-    <section class="daily-section">
+    <section class="daily-section" aria-label="Daily forecast">
       <h2>Daily Overview</h2>
       <div class="daily-grid" id="daily-grid"></div>
     </section>
 
     <footer class="app-footer" id="app-footer"></footer>
   </div>
-</div>
+</main>
 
 <script>
+// ── Constants ────────────────────────────────────────────────────────
+const STALE_MS = 60 * 60 * 1000;       // 1 hour — data staleness threshold
+const LOC_CACHE_TTL = 30 * 60 * 1000;  // 30 min — geolocation cache TTL
+const PRECIP_NOISE_FLOOR = 0.1;        // mm — precipitation noise threshold
+const DAY_START_HOUR = 7;              // start of "daytime" period
+const DAY_END_HOUR = 20;               // end of "daytime" period
+
 // ── Localization ─────────────────────────────────────────────────────
 const I18N = {
   en: {
@@ -582,6 +596,12 @@ function getWmo(code) {
 }
 
 // ── Utility Functions ────────────────────────────────────────────────
+function escapeHtml(str) {
+  const d = document.createElement("div");
+  d.textContent = str;
+  return d.innerHTML;
+}
+
 function weightedMean(values, weights) {
   let sw = 0, svw = 0;
   for (let i = 0; i < values.length; i++) {
@@ -821,9 +841,21 @@ function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSou
   if (!valid.length && !anyIndependent) return null;
 
   const refSource = allOk[0] || valid[0];
-  if (!refSource) return null;
-  const times = refSource.data.hourly.time;
-  const utcOffset = refSource.data.utc_offset_seconds || 0;
+  let times, utcOffset;
+  if (refSource) {
+    times = refSource.data.hourly.time;
+    utcOffset = refSource.data.utc_offset_seconds || 0;
+  } else {
+    // No Open-Meteo source available — generate synthetic hourly timestamps (UTC)
+    utcOffset = 0;
+    times = [];
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    for (let h = 0; h < 24 * 5; h++) {
+      const d = new Date(start.getTime() + h * 3600000);
+      times.push(d.toISOString().slice(0, 16));
+    }
+  }
 
   // Normalize independent sources
   const wttrHasData = wttrResult?.ok && wttrResult.data;
@@ -839,61 +871,50 @@ function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSou
   if (wttrHasData) allChartKeys.push("wttr");
   if (metHasData) allChartKeys.push("met_norway");
 
-  // Helper: collect value+weight from an independent source
-  function pushIndep(norm, weight, param, i, vals, ws) {
-    const v = norm.hourly[param]?.[i];
-    if (v != null) { vals.push(v); ws.push(weight); }
+  // Helper: collect values + weights for a parameter from all sources at index i
+  const WEIGHTED_PARAMS = ["temperature_2m", "relative_humidity_2m", "pressure_msl", "wind_speed_10m", "wind_direction_10m", "cloud_cover", "weather_code"];
+  function collectParam(param, i, sources) {
+    const vals = [], ws = [];
+    for (const { hourly, weight } of sources) {
+      const v = hourly[param]?.[i];
+      if (v != null) { vals.push(v); ws.push(weight); }
+    }
+    return { vals, ws };
   }
+  function collectUnweighted(param, i, sources) {
+    const vals = [];
+    for (const { hourly } of sources) {
+      const v = hourly[param]?.[i];
+      if (v != null) vals.push(v);
+    }
+    return vals;
+  }
+
+  // Build unified source list for hourly collection
+  const enabledSources = [];
+  for (const r of valid) enabledSources.push({ hourly: r.data.hourly, weight: MODELS[r.key].weight });
+  if (wttr) enabledSources.push({ hourly: wttr.hourly, weight: WTTR.weight });
+  if (met) enabledSources.push({ hourly: met.hourly, weight: MET_NORWAY.weight });
 
   // Hourly aggregation
   let confidenceSum = 0, confidenceN = 0;
   const hourly = times.map((t, i) => {
     const row = { time: t };
-    const temps = [], humids = [], pressures = [], winds = [];
-    const wdirs = [], precips = [], clouds = [], codes = [];
-    const tW = [], hW = [], pW = [], wW = [], wdW = [], clW = [], coW = [];
 
     // Chart line data for ALL responding sources
     for (const r of allOk) row[`temp_${r.key}`] = r.data.hourly.temperature_2m?.[i] ?? null;
     if (wttrNorm) row.temp_wttr = wttrNorm.hourly.temperature_2m[i];
     if (metNorm) row.temp_met_norway = metNorm.hourly.temperature_2m[i];
 
-    // Enabled Open-Meteo models
-    for (const r of valid) {
-      const h = r.data.hourly, w = MODELS[r.key].weight;
-      if (h.temperature_2m?.[i] != null) { temps.push(h.temperature_2m[i]); tW.push(w); }
-      if (h.relative_humidity_2m?.[i] != null) { humids.push(h.relative_humidity_2m[i]); hW.push(w); }
-      if (h.pressure_msl?.[i] != null) { pressures.push(h.pressure_msl[i]); pW.push(w); }
-      if (h.wind_speed_10m?.[i] != null) { winds.push(h.wind_speed_10m[i]); wW.push(w); }
-      if (h.wind_direction_10m?.[i] != null) { wdirs.push(h.wind_direction_10m[i]); wdW.push(w); }
-      if (h.precipitation?.[i] != null) precips.push(h.precipitation[i]);
-      if (h.cloud_cover?.[i] != null) { clouds.push(h.cloud_cover[i]); clW.push(w); }
-      if (h.weather_code?.[i] != null) { codes.push(h.weather_code[i]); coW.push(w); }
-    }
-    // wttr.in
-    if (wttr) {
-      const w = WTTR.weight;
-      pushIndep(wttr, w, "temperature_2m", i, temps, tW);
-      pushIndep(wttr, w, "relative_humidity_2m", i, humids, hW);
-      pushIndep(wttr, w, "pressure_msl", i, pressures, pW);
-      pushIndep(wttr, w, "wind_speed_10m", i, winds, wW);
-      pushIndep(wttr, w, "wind_direction_10m", i, wdirs, wdW);
-      if (wttr.hourly.precipitation[i] != null) precips.push(wttr.hourly.precipitation[i]);
-      pushIndep(wttr, w, "cloud_cover", i, clouds, clW);
-      if (wttr.hourly.weather_code[i] != null) { codes.push(wttr.hourly.weather_code[i]); coW.push(w); }
-    }
-    // MET Norway
-    if (met) {
-      const w = MET_NORWAY.weight;
-      pushIndep(met, w, "temperature_2m", i, temps, tW);
-      pushIndep(met, w, "relative_humidity_2m", i, humids, hW);
-      pushIndep(met, w, "pressure_msl", i, pressures, pW);
-      pushIndep(met, w, "wind_speed_10m", i, winds, wW);
-      pushIndep(met, w, "wind_direction_10m", i, wdirs, wdW);
-      if (met.hourly.precipitation[i] != null) precips.push(met.hourly.precipitation[i]);
-      pushIndep(met, w, "cloud_cover", i, clouds, clW);
-      if (met.hourly.weather_code[i] != null) { codes.push(met.hourly.weather_code[i]); coW.push(w); }
-    }
+    // Collect all params from enabled sources
+    const { vals: temps, ws: tW } = collectParam("temperature_2m", i, enabledSources);
+    const { vals: humids, ws: hW } = collectParam("relative_humidity_2m", i, enabledSources);
+    const { vals: pressures, ws: pW } = collectParam("pressure_msl", i, enabledSources);
+    const { vals: winds, ws: wW } = collectParam("wind_speed_10m", i, enabledSources);
+    const { vals: wdirs, ws: wdW } = collectParam("wind_direction_10m", i, enabledSources);
+    const { vals: clouds, ws: clW } = collectParam("cloud_cover", i, enabledSources);
+    const { vals: codes, ws: coW } = collectParam("weather_code", i, enabledSources);
+    const precips = collectUnweighted("precipitation", i, enabledSources);
 
     // Agreement-aware aggregation for temperature
     const tempResult = smartMean(temps, tW);
@@ -908,7 +929,7 @@ function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSou
     row.wind = weightedMean(winds, wW);
     row.windDir = wdirs.length ? circularMean(wdirs) : 0;
     // Precipitation: median (robust to outliers), filter noise < 0.1mm
-    const sigPrecip = precips.filter(v => v >= 0.1);
+    const sigPrecip = precips.filter(v => v >= PRECIP_NOISE_FLOOR);
     row.precipitation = sigPrecip.length ? round1(arrMedian(sigPrecip)) : 0;
     row.precipConsensus = precips.length ? Math.round(sigPrecip.length / precips.length * 100) : 0;
     row.cloud_cover = weightedMean(clouds, clW);
@@ -965,7 +986,7 @@ function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSou
 
   const daily = Object.entries(dayMap).map(([date, pts]) => {
     const allTemps = pts.map((p) => p.temp_agg).filter((v) => v != null);
-    const dayPts = pts.filter((p) => { const hr = parseInt(p.time.slice(11, 13)); return hr >= 7 && hr <= 20; });
+    const dayPts = pts.filter((p) => { const hr = parseInt(p.time.slice(11, 13)); return hr >= DAY_START_HOUR && hr <= DAY_END_HOUR; });
     const dayCodes = dayPts.map((p) => p.weather_code).filter((v) => v != null);
     const totalP = pts.reduce((s, p) => s + (p.precipitation || 0), 0);
     const maxW = Math.max(0, ...pts.map((p) => p.wind || 0));
@@ -1009,30 +1030,23 @@ function setLang(lang) {
   document.documentElement.lang = lang;
   document.getElementById("lang-select").value = lang;
   // Re-render all text
-  if (!gOpenMeteoResults) return;
-  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!state.openMeteoResults) return;
+  const agg = aggregateAll(state.openMeteoResults, state.wttrResult, state.metNorwayResult, disabledSources);
   if (!agg) return;
-  renderHeader(agg, gOpenMeteoResults, gWttrResult, gMetNorwayResult, gLoc);
-  renderHero(agg.current);
-  renderTiles(agg.current);
-  buildChart(agg);
-  renderChartLegend(agg);
-  renderDaily(agg.daily);
-  renderFooter();
-  document.querySelector(".chart-header h2").textContent = t("temp_precip");
-  document.querySelector(".daily-section h2").textContent = t("daily_overview");
-  document.getElementById("chart-toggle").textContent = t(showModels ? "hide_models" : "show_models");
+  renderAll(agg, state.openMeteoResults, state.wttrResult, state.metNorwayResult, state.loc);
 }
 
 function setUnit(u) {
   useFahrenheit = (u === "F");
   localStorage.setItem("mw_unit", u);
   document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
-    el.classList.toggle("active", el.dataset.unit === u);
+    const isActive = el.dataset.unit === u;
+    el.classList.toggle("active", isActive);
+    el.setAttribute("aria-checked", isActive);
   });
   // Rebuild chart (axis labels change) and re-render
-  if (!gOpenMeteoResults) return;
-  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!state.openMeteoResults) return;
+  const agg = aggregateAll(state.openMeteoResults, state.wttrResult, state.metNorwayResult, disabledSources);
   if (!agg) return;
   renderHero(agg.current);
   renderTiles(agg.current);
@@ -1041,22 +1055,23 @@ function setUnit(u) {
   renderDaily(agg.daily);
 }
 
-// ── Global State (for reaggregation) ─────────────────────────────────
-let lastFetchTime = 0;
-const STALE_MS = 60 * 60 * 1000; // 1 hour
-let gOpenMeteoResults = null;
-let gWttrResult = null;
-let gMetNorwayResult = null;
-let gLoc = null;
-const disabledSources = new Set(JSON.parse(localStorage.getItem("mw_disabled") || "[]"));
-
-// ── Chart ────────────────────────────────────────────────────────────
-let mainChart = null;
-let showModels = localStorage.getItem("mw_show_models") !== "false";
-let chartDays = parseInt(localStorage.getItem("mw_chart_days")) || 5;
+// ── Global State ─────────────────────────────────────────────────────
+const state = {
+  lastFetchTime: 0,
+  openMeteoResults: null,
+  wttrResult: null,
+  metNorwayResult: null,
+  loc: null,
+  mainChart: null,
+  showModels: localStorage.getItem("mw_show_models") !== "false",
+  chartDays: parseInt(localStorage.getItem("mw_chart_days")) || 5,
+};
+let disabledSources;
+try { disabledSources = new Set(JSON.parse(localStorage.getItem("mw_disabled") || "[]")); }
+catch { disabledSources = new Set(); }
 
 function chartData(agg) {
-  const maxHours = chartDays * 24 / 3; // chart is every 3rd hour
+  const maxHours = state.chartDays * 24 / 3; // chart is every 3rd hour
   return agg.chart.slice(0, maxHours);
 }
 
@@ -1080,7 +1095,8 @@ function buildChart(agg) {
       pointHoverRadius: 3,
       tension: 0.3,
       yAxisID: "y",
-      hidden: !showModels,
+      hidden: !state.showModels || disabledSources.has(k),
+      _sourceKey: k,
       order: 2,
     });
   }
@@ -1120,9 +1136,9 @@ function buildChart(agg) {
     order: 3,
   });
 
-  if (mainChart) mainChart.destroy();
+  if (state.mainChart) state.mainChart.destroy();
 
-  mainChart = new Chart(ctx, {
+  state.mainChart = new Chart(ctx, {
     type: "line",
     data: { labels, datasets },
     options: {
@@ -1151,10 +1167,10 @@ function buildChart(agg) {
           callbacks: {
             title(items) {
               if (!items.length) return "";
-              const t = items[0].label;
-              const dt = new Date(t);
+              const timeStr = items[0].label;
+              const dt = new Date(timeStr);
               return dt.toLocaleDateString(currentLang, { weekday: "short", month: "short", day: "numeric" })
-                + "  " + t.slice(11, 16);
+                + "  " + timeStr.slice(11, 16);
             },
             filter(item) {
               return item.raw != null && (item.dataset.label !== "Precipitation" || item.raw > 0);
@@ -1221,13 +1237,15 @@ function buildChart(agg) {
 }
 
 function setChartDays(days) {
-  chartDays = days;
+  state.chartDays = days;
   localStorage.setItem("mw_chart_days", days);
-  document.querySelectorAll("#days-toggle span").forEach(el => {
-    el.classList.toggle("active", parseInt(el.dataset.days) === days);
+  document.querySelectorAll("#days-toggle span[data-days]").forEach(el => {
+    const isActive = parseInt(el.dataset.days) === days;
+    el.classList.toggle("active", isActive);
+    el.setAttribute("aria-checked", isActive);
   });
-  if (!gOpenMeteoResults) return;
-  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!state.openMeteoResults) return;
+  const agg = aggregateAll(state.openMeteoResults, state.wttrResult, state.metNorwayResult, disabledSources);
   if (agg) {
     buildChart(agg);
     renderDaily(agg.daily);
@@ -1235,13 +1253,14 @@ function setChartDays(days) {
 }
 
 function toggleSource(key, badge) {
-  if (!gOpenMeteoResults) return;
+  if (!state.openMeteoResults) return;
   if (disabledSources.has(key)) {
     disabledSources.delete(key);
   } else {
     disabledSources.add(key);
   }
   badge.classList.toggle("disabled", disabledSources.has(key));
+  badge.setAttribute("aria-checked", !disabledSources.has(key));
   localStorage.setItem("mw_disabled", JSON.stringify([...disabledSources]));
   const legendEl = document.querySelector(`.legend-source[data-source="${key}"]`);
   if (legendEl) legendEl.style.display = disabledSources.has(key) ? "none" : "";
@@ -1249,7 +1268,7 @@ function toggleSource(key, badge) {
 }
 
 function reaggregate() {
-  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  const agg = aggregateAll(state.openMeteoResults, state.wttrResult, state.metNorwayResult, disabledSources);
   if (!agg) return;
   renderHero(agg.current);
   renderTiles(agg.current);
@@ -1258,44 +1277,40 @@ function reaggregate() {
 }
 
 function updateChartData(agg) {
-  if (!mainChart) { buildChart(agg); return; }
+  if (!state.mainChart) { buildChart(agg); return; }
   const data = chartData(agg);
-  for (const ds of mainChart.data.datasets) {
+  for (const ds of state.mainChart.data.datasets) {
     if (ds.label === "Aggregated") {
       ds.data = data.map(d => toDisplay(d.temp_agg));
     } else if (ds.label === "Precipitation") {
       ds.data = data.map(d => d.precipitation);
-    } else {
-      for (const k of agg.modelKeys) {
-        if (ds.label === getSourceConfig(k).name) {
-          ds.data = data.map(d => toDisplay(d[`temp_${k}`]));
-          break;
-        }
-      }
+    } else if (ds._sourceKey) {
+      ds.data = data.map(d => toDisplay(d[`temp_${ds._sourceKey}`]));
+      ds.hidden = !state.showModels || disabledSources.has(ds._sourceKey);
     }
   }
-  mainChart.update("reaggregate");
+  state.mainChart.update("reaggregate");
 }
 
 function toggleModels() {
-  showModels = !showModels;
-  localStorage.setItem("mw_show_models", showModels);
+  state.showModels = !state.showModels;
+  localStorage.setItem("mw_show_models", state.showModels);
   const btn = document.getElementById("chart-toggle");
-  btn.textContent = showModels ? t("hide_models") : t("show_models");
-  btn.classList.toggle("active", showModels);
+  btn.textContent = state.showModels ? t("hide_models") : t("show_models");
+  btn.classList.toggle("active", state.showModels);
 
   // Toggle legend items
   document.querySelectorAll(".legend-source").forEach(el => {
-    el.style.display = (!showModels || disabledSources.has(el.dataset.source)) ? "none" : "";
+    el.style.display = (!state.showModels || disabledSources.has(el.dataset.source)) ? "none" : "";
   });
 
-  if (!mainChart) return;
-  for (const ds of mainChart.data.datasets) {
-    if (ds.label !== "Aggregated" && ds.label !== "Precipitation") {
-      ds.hidden = !showModels;
+  if (!state.mainChart) return;
+  for (const ds of state.mainChart.data.datasets) {
+    if (ds._sourceKey) {
+      ds.hidden = !state.showModels || disabledSources.has(ds._sourceKey);
     }
   }
-  mainChart.update();
+  state.mainChart.update();
 }
 
 // ── Render Functions ─────────────────────────────────────────────────
@@ -1324,11 +1339,17 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
   }
   document.getElementById("header-loc").textContent = `\uD83D\uDCCD ${locName}`;
 
-  let statusHtml = `${loc.lat.toFixed(4)}\u00B0N \u00B7 ${loc.lon.toFixed(4)}\u00B0E \u00B7 ${agg.timezone} \u00B7 \u25C9 ${totalOk}/${totalSrc} ${t("sources")}`;
+  const coordsEl = document.getElementById("header-coords");
+  coordsEl.textContent = "";
+  coordsEl.appendChild(document.createTextNode(
+    `${loc.lat.toFixed(4)}\u00B0N \u00B7 ${loc.lon.toFixed(4)}\u00B0E \u00B7 ${agg.timezone || "UTC"} \u00B7 \u25C9 ${totalOk}/${totalSrc} ${t("sources")}`
+  ));
   if (failNames.length > 0) {
-    statusHtml += `<span class="fail"> (${failNames.join(", ")} ${t("failed")})</span>`;
+    const failSpan = document.createElement("span");
+    failSpan.className = "fail";
+    failSpan.textContent = ` (${failNames.join(", ")} ${t("failed")})`;
+    coordsEl.appendChild(failSpan);
   }
-  document.getElementById("header-coords").innerHTML = statusHtml;
 
   const badges = document.getElementById("model-badges");
   badges.innerHTML = "";
@@ -1343,7 +1364,13 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
     badge.textContent = src.cfg.name;
     if (src.ok) {
       badge.title = t("toggle_source");
+      badge.setAttribute("role", "switch");
+      badge.setAttribute("aria-checked", !isDisabled);
+      badge.tabIndex = 0;
       badge.addEventListener("click", () => toggleSource(src.key, badge));
+      badge.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSource(src.key, badge); }
+      });
     }
     badges.appendChild(badge);
   }
@@ -1364,15 +1391,23 @@ function renderHero(cur) {
   const spreadClass = cur.spread < 1 ? "spread-ok" : cur.spread < 2.5 ? "spread-mid" : "spread-bad";
   const confPct = Math.round((cur.confidence || 0) * 100);
   const confClass = confPct >= 80 ? "spread-ok" : confPct >= 50 ? "spread-mid" : "spread-bad";
-  meta.innerHTML = `<span>${t("confidence")}: <b class="${confClass}">${confPct}%</b></span>`
-    + `<span>${t("spread")}: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b></span>`;
+  meta.textContent = "";
+  const confSpan = document.createElement("span");
+  confSpan.innerHTML = `${escapeHtml(t("confidence"))}: <b class="${confClass}">${confPct}%</b>`;
+  const spreadSpan = document.createElement("span");
+  spreadSpan.innerHTML = `${escapeHtml(t("spread"))}: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b>`;
+  meta.append(confSpan, spreadSpan);
 
   let existing = meta.parentElement.querySelector(".hero-meta-sources");
   if (!existing) { existing = document.createElement("div"); existing.className = "hero-meta-sources"; meta.after(existing); }
-  existing.innerHTML = cur.perModel
-    .filter(m => m.temp != null)
-    .map(m => { const c = getSourceConfig(m.key); return `<span style="color:${c.color}">${c.name}: ${fmtTemp(m.temp)}\u00B0</span>`; })
-    .join("");
+  existing.textContent = "";
+  for (const m of cur.perModel.filter(m => m.temp != null)) {
+    const c = getSourceConfig(m.key);
+    const span = document.createElement("span");
+    span.style.color = c.color;
+    span.textContent = `${c.name}: ${fmtTemp(m.temp)}\u00B0`;
+    existing.appendChild(span);
+  }
 }
 
 function renderTiles(cur) {
@@ -1383,10 +1418,10 @@ function renderTiles(cur) {
     { icon: "\uD83D\uDCCA", label: t("pressure"), value: cur.pressure != null ? cur.pressure.toFixed(0) : "\u2014", unit: "hPa" },
     { icon: "\u2601\uFE0F", label: t("clouds"), value: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : "\u2014", unit: "%" },
   ];
-  tiles.innerHTML = data.map(t => `
+  tiles.innerHTML = data.map(tile => `
     <div class="tile">
-      <div class="tile-label">${t.icon} ${t.label}</div>
-      <div class="tile-value">${t.value}<span class="unit">${t.unit}</span></div>
+      <div class="tile-label">${tile.icon} ${tile.label}</div>
+      <div class="tile-value">${tile.value}<span class="unit">${tile.unit}</span></div>
     </div>
   `).join("");
 }
@@ -1407,7 +1442,7 @@ function renderChartLegend(agg) {
     const item = document.createElement("span");
     item.className = "legend-item hoverable legend-source";
     item.dataset.source = k;
-    if (!showModels || disabledSources.has(k)) item.style.display = "none";
+    if (!state.showModels || disabledSources.has(k)) item.style.display = "none";
     item.innerHTML = `<span class="legend-dash" style="border-color:${cfg.color}"></span> ${cfg.name}`;
     item.addEventListener("mouseenter", () => highlightSource(k, true));
     item.addEventListener("mouseleave", () => highlightSource(k, false));
@@ -1422,10 +1457,10 @@ function renderChartLegend(agg) {
 }
 
 function highlightSource(key, on) {
-  if (!mainChart) return;
+  if (!state.mainChart) return;
   const cfg = getSourceConfig(key);
   const targetLabel = cfg?.name;
-  for (const ds of mainChart.data.datasets) {
+  for (const ds of state.mainChart.data.datasets) {
     if (ds.label === "Aggregated" || ds.label === "Precipitation") continue;
     if (ds.label === targetLabel) {
       ds.borderColor = on ? cfg.color : cfg.color + "40";
@@ -1436,12 +1471,12 @@ function highlightSource(key, on) {
       ds.borderWidth = 1;
     }
   }
-  mainChart.update("none");
+  state.mainChart.update("none");
 }
 
 function renderDaily(daily) {
   const grid = document.getElementById("daily-grid");
-  grid.innerHTML = daily.slice(0, chartDays).map((d, i) => {
+  grid.innerHTML = daily.slice(0, state.chartDays).map((d, i) => {
     const w = getWmo(d.weather_code);
     const today = i === 0;
     return `
@@ -1470,7 +1505,7 @@ function renderFooter() {
   for (const m of allSrc) {
     html += `<div class="footer-model">
       <span class="footer-dot" style="background:${m.color}"></span>
-      <b style="color:${m.color}">${m.name}</b> \u2014 ${m.desc}
+      <b style="color:${m.color}">${escapeHtml(m.name)}</b> \u2014 ${escapeHtml(m.desc)}
     </div>`;
   }
   html += `<div class="footer-divider">${t("agg_desc")}</div>`;
@@ -1484,33 +1519,46 @@ function renderFooter() {
   footer.innerHTML = html;
 }
 
+function renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
+  renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
+  renderHero(agg.current);
+  renderTiles(agg.current);
+  buildChart(agg);
+  renderChartLegend(agg);
+  renderDaily(agg.daily);
+  renderFooter();
+  document.querySelector(".chart-header h2").textContent = t("temp_precip");
+  document.querySelector(".daily-section h2").textContent = t("daily_overview");
+  document.getElementById("chart-toggle").textContent = t(state.showModels ? "hide_models" : "show_models");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
+let isRefreshing = false;
 async function refresh() {
-  if (!gLoc) return;
+  if (!state.loc || isRefreshing) return;
+  isRefreshing = true;
   const btn = document.getElementById("refresh-btn");
   btn.classList.add("spinning");
+  try {
+    const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
+      Promise.all(Object.keys(MODELS).map(k => fetchModel(k, state.loc.lat, state.loc.lon))),
+      fetchWttrIn(state.loc.lat, state.loc.lon),
+      fetchMetNorway(state.loc.lat, state.loc.lon),
+    ]);
 
-  const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
-    Promise.all(Object.keys(MODELS).map(k => fetchModel(k, gLoc.lat, gLoc.lon))),
-    fetchWttrIn(gLoc.lat, gLoc.lon),
-    fetchMetNorway(gLoc.lat, gLoc.lon),
-  ]);
+    state.openMeteoResults = openMeteoResults;
+    state.wttrResult = wttrResult;
+    state.metNorwayResult = metNorwayResult;
+    state.lastFetchTime = Date.now();
 
-  gOpenMeteoResults = openMeteoResults;
-  gWttrResult = wttrResult;
-  gMetNorwayResult = metNorwayResult;
-  lastFetchTime = Date.now();
-
-  const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources);
-  if (agg) {
-    renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, gLoc);
-    renderHero(agg.current);
-    renderTiles(agg.current);
-    buildChart(agg);
-    renderChartLegend(agg);
-    renderDaily(agg.daily);
+    const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources);
+    if (agg) {
+      renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, state.loc);
+    }
+  } finally {
+    btn.classList.remove("spinning");
+    isRefreshing = false;
   }
-  btn.classList.remove("spinning");
 }
 
 async function main() {
@@ -1522,9 +1570,11 @@ async function main() {
 
   // Get location: use short-lived cache (30 min), then re-detect
   const FALLBACK = { lat: 50.4501, lon: 30.5234 };
-  const LOC_TTL = 30 * 60 * 1000; // 30 minutes
+  const LOC_TTL = LOC_CACHE_TTL;
   const cachedRaw = localStorage.getItem("mw_loc");
-  const cached = cachedRaw ? JSON.parse(cachedRaw) : null;
+  let cached;
+  try { cached = cachedRaw ? JSON.parse(cachedRaw) : null; }
+  catch { cached = null; }
   let loc = (cached && Date.now() - cached.ts < LOC_TTL) ? cached : null;
 
   if (!loc) {
@@ -1557,13 +1607,13 @@ async function main() {
 
 
   // Store globally for reaggregation
-  gOpenMeteoResults = openMeteoResults;
-  gWttrResult = wttrResult;
-  gMetNorwayResult = metNorwayResult;
-  gLoc = loc;
-  lastFetchTime = Date.now();
+  state.openMeteoResults = openMeteoResults;
+  state.wttrResult = wttrResult;
+  state.metNorwayResult = metNorwayResult;
+  state.loc = loc;
+  state.lastFetchTime = Date.now();
 
-  const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult);
+  const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources);
   if (!agg) {
     document.getElementById("loader").style.display = "none";
     const err = document.getElementById("error-screen");
@@ -1579,44 +1629,38 @@ async function main() {
   // Apply saved preferences to UI
   if (useFahrenheit) {
     document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
-      el.classList.toggle("active", el.dataset.unit === "F");
+      const isActive = el.dataset.unit === "F";
+      el.classList.toggle("active", isActive);
+      el.setAttribute("aria-checked", isActive);
     });
   }
-  document.querySelectorAll("#days-toggle span").forEach(el => {
-    el.classList.toggle("active", parseInt(el.dataset.days) === chartDays);
+  document.querySelectorAll("#days-toggle span[data-days]").forEach(el => {
+    const isActive = parseInt(el.dataset.days) === state.chartDays;
+    el.classList.toggle("active", isActive);
+    el.setAttribute("aria-checked", isActive);
   });
-  if (!showModels) {
+  if (!state.showModels) {
     document.getElementById("chart-toggle").textContent = t("show_models");
     document.getElementById("chart-toggle").classList.remove("active");
   }
 
-  renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
-  renderHero(agg.current);
-  renderTiles(agg.current);
-  buildChart(agg);
-  renderChartLegend(agg);
-  renderDaily(agg.daily);
-  renderFooter();
-  // Localize static HTML headers
-  document.querySelector(".chart-header h2").textContent = t("temp_precip");
-  document.querySelector(".daily-section h2").textContent = t("daily_overview");
-  document.getElementById("chart-toggle").textContent = t(showModels ? "hide_models" : "show_models");
+  renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
 }
 
 // Dismiss chart tooltip on touch outside canvas
 document.addEventListener("touchstart", (e) => {
-  if (!mainChart) return;
+  if (!state.mainChart) return;
   const canvas = document.getElementById("main-chart");
   if (canvas && !canvas.contains(e.target)) {
-    mainChart.setActiveElements([]);
-    mainChart.tooltip.setActiveElements([], { x: 0, y: 0 });
-    mainChart.update("none");
+    state.mainChart.setActiveElements([]);
+    state.mainChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    state.mainChart.update("none");
   }
 });
 
 // Auto-refresh when returning to app after 1+ hour
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && lastFetchTime && Date.now() - lastFetchTime > STALE_MS) {
+  if (!document.hidden && state.lastFetchTime && Date.now() - state.lastFetchTime > STALE_MS) {
     refresh();
   }
 });

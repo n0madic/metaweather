@@ -1,9 +1,11 @@
-const CACHE = "metaweather-v2";
+// IMPORTANT: bump version on every deployment
+const CACHE = "metaweather-v3";
 const STATIC = ["./", "index.html", "manifest.json", "icon.svg"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(STATIC)));
-  self.skipWaiting();
+  e.waitUntil(
+    caches.open(CACHE).then((c) => c.addAll(STATIC)).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -18,9 +20,16 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // API requests: network only
+  // API requests: network with offline fallback
   if (url.hostname !== location.hostname) {
-    e.respondWith(fetch(e.request));
+    e.respondWith(
+      fetch(e.request).catch(() =>
+        new Response(JSON.stringify({ error: "offline" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    );
     return;
   }
 

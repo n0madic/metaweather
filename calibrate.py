@@ -153,8 +153,8 @@ def compute_suggested_weights(
         if key in raw_scores:
             suggested[key] = round(raw_scores[key] / max_score, 2)
         else:
-            # Source failed — keep current but halve it
-            suggested[key] = round(current_weights[key] * 0.5, 2)
+            # Source failed — decay weight but enforce a floor
+            suggested[key] = round(max(current_weights[key] * 0.75, 0.1), 2)
 
     return suggested
 
@@ -207,6 +207,11 @@ def main():
     parser.add_argument("--lat", type=float, default=None)
     parser.add_argument("--lon", type=float, default=None)
     args = parser.parse_args()
+
+    if args.lat is not None and (args.lat < -90 or args.lat > 90):
+        parser.error("Latitude must be between -90 and 90")
+    if args.lon is not None and (args.lon < -180 or args.lon > 180):
+        parser.error("Longitude must be between -180 and 180")
 
     real = args.real_temp
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
