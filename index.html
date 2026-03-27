@@ -66,8 +66,7 @@
   .spinner-ring:nth-child(3) { inset: 12px; border-top-color: var(--accent-yellow); animation: orbit 1.8s linear infinite; }
   @keyframes orbit { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
-  .loader-title { font-size: 17px; font-weight: 600; color: var(--text-secondary); }
-  .loader-stage { font-size: 13px; color: var(--text-dim); margin-top: 6px; animation: pulse 2s ease infinite; }
+  .loader-title { font-size: 17px; font-weight: 600; color: var(--text-secondary); animation: pulse 2s ease infinite; }
 
   /* Main layout */
   #app { display: none; }
@@ -84,6 +83,14 @@
     border-bottom: 1px solid rgba(255,255,255,0.05);
   }
   .header-title { font-size: 21px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.4px; display: flex; align-items: center; gap: 8px; }
+  .lang-select {
+    font-size: 11px; padding: 2px 4px; border-radius: 4px;
+    background: rgba(255,255,255,0.04); color: var(--text-muted);
+    border: 1px solid rgba(255,255,255,0.06); cursor: pointer;
+    outline: none;
+  }
+  .lang-select:hover { background: rgba(255,255,255,0.08); }
+  .lang-select option { background: var(--bg-secondary); color: var(--text-secondary); }
   .refresh-btn {
     width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.04);
     background: rgba(255,255,255,0.03); color: var(--text-muted); cursor: pointer;
@@ -273,8 +280,7 @@
     <div class="spinner-ring"></div>
     <div class="spinner-ring"></div>
   </div>
-  <div class="loader-title">Gathering forecasts</div>
-  <div class="loader-stage" id="loader-stage">Detecting location...</div>
+  <div class="loader-title" id="loader-title">Gathering forecasts</div>
 </div>
 
 <!-- Error Screen -->
@@ -284,7 +290,7 @@
 <div id="app">
   <header>
     <div>
-      <h1 class="header-title" id="header-title"><span id="header-loc"></span><button class="refresh-btn" id="refresh-btn" title="Refresh forecasts" onclick="refresh()">&#x21bb;</button></h1>
+      <h1 class="header-title" id="header-title"><span id="header-loc"></span><button class="refresh-btn" id="refresh-btn" onclick="refresh()">&#x21bb;</button><select class="lang-select" id="lang-select" onchange="setLang(this.value)"><option value="en">EN</option><option value="ru">RU</option><option value="uk">UK</option></select></h1>
       <div class="header-coords" id="header-coords"></div>
     </div>
     <div class="model-badges" id="model-badges"></div>
@@ -325,6 +331,101 @@
 </div>
 
 <script>
+// ── Localization ─────────────────────────────────────────────────────
+const I18N = {
+  en: {
+    humidity: "Humidity", wind: "Wind", pressure: "Pressure", clouds: "Clouds",
+    feels_like: "Feels like", confidence: "Confidence", spread: "Spread",
+    today: "Today", daily_overview: "Daily Overview",
+    temp_precip: "Temperature & Precipitation",
+    hide_models: "Hide models", show_models: "Show models",
+    gathering: "Gathering forecasts", detecting: "Detecting location\u2026",
+
+
+    sources_failed: "All weather sources failed. Please try again later.",
+    sources: "sources", failed: "failed", toggle_source: "Toggle source",
+    data_sources: "Data Sources & Method",
+    agg_desc: "Aggregation: agreement-aware weighted mean with outlier dampening (temperature), circular mean (wind direction), median (precipitation), majority vote (conditions). Confidence = mean agreement factor across sources.",
+    no_keys: "No API keys required",
+    powered_by: "Powered by",
+    aggregated: "Aggregated", precip_mm: "Precip (mm)",
+    refresh: "Refresh forecasts",
+    wmo_0: "Clear sky", wmo_1: "Mainly clear", wmo_2: "Partly cloudy", wmo_3: "Overcast",
+    wmo_45: "Fog", wmo_48: "Rime fog",
+    wmo_51: "Light drizzle", wmo_53: "Drizzle", wmo_55: "Dense drizzle",
+    wmo_56: "Freezing drizzle", wmo_57: "Heavy freezing drizzle",
+    wmo_61: "Light rain", wmo_63: "Rain", wmo_65: "Heavy rain",
+    wmo_66: "Freezing rain", wmo_67: "Heavy freezing rain",
+    wmo_71: "Light snow", wmo_73: "Snow", wmo_75: "Heavy snow", wmo_77: "Snow grains",
+    wmo_80: "Rain showers", wmo_81: "Moderate showers", wmo_82: "Heavy showers",
+    wmo_85: "Snow showers", wmo_86: "Heavy snow showers",
+    wmo_95: "Thunderstorm", wmo_96: "Thunderstorm with hail", wmo_99: "Severe thunderstorm",
+    wmo_unknown: "Unknown",
+  },
+  ru: {
+    humidity: "Влажность", wind: "Ветер", pressure: "Давление", clouds: "Облачность",
+    feels_like: "Ощущается как", confidence: "Уверенность", spread: "Разброс",
+    today: "Сегодня", daily_overview: "Прогноз по дням",
+    temp_precip: "Температура и осадки",
+    hide_models: "Скрыть модели", show_models: "Показать модели",
+    gathering: "Сбор прогнозов", detecting: "Определение местоположения\u2026",
+
+
+    sources_failed: "Все источники недоступны. Попробуйте позже.",
+    sources: "источников", failed: "недоступны", toggle_source: "Вкл/выкл источник",
+    data_sources: "Источники и метод",
+    agg_desc: "Агрегация: взвешенное среднее с подавлением выбросов (температура), циркулярное среднее (ветер), медиана (осадки), голосование (условия).",
+    no_keys: "Без API-ключей",
+    powered_by: "На основе",
+    aggregated: "Агрегат", precip_mm: "Осадки (mm)",
+    refresh: "Обновить прогноз",
+    wmo_0: "Ясно", wmo_1: "Преимущественно ясно", wmo_2: "Переменная облачность", wmo_3: "Пасмурно",
+    wmo_45: "Туман", wmo_48: "Изморозь",
+    wmo_51: "Лёгкая морось", wmo_53: "Морось", wmo_55: "Сильная морось",
+    wmo_56: "Ледяная морось", wmo_57: "Сильная ледяная морось",
+    wmo_61: "Небольшой дождь", wmo_63: "Дождь", wmo_65: "Сильный дождь",
+    wmo_66: "Ледяной дождь", wmo_67: "Сильный ледяной дождь",
+    wmo_71: "Небольшой снег", wmo_73: "Снег", wmo_75: "Сильный снег", wmo_77: "Снежные зёрна",
+    wmo_80: "Кратковременный дождь", wmo_81: "Умеренный ливень", wmo_82: "Сильный ливень",
+    wmo_85: "Снежный заряд", wmo_86: "Сильный снежный заряд",
+    wmo_95: "Гроза", wmo_96: "Гроза с градом", wmo_99: "Сильная гроза",
+    wmo_unknown: "Неизвестно",
+  },
+  uk: {
+    humidity: "Вологість", wind: "Вітер", pressure: "Тиск", clouds: "Хмарність",
+    feels_like: "Відчувається як", confidence: "Впевненість", spread: "Розкид",
+    today: "Сьогодні", daily_overview: "Прогноз по днях",
+    temp_precip: "Температура та опади",
+    hide_models: "Сховати моделі", show_models: "Показати моделі",
+    gathering: "Збір прогнозів", detecting: "Визначення місцезнаходження\u2026",
+
+
+    sources_failed: "Всі джерела недоступні. Спробуйте пізніше.",
+    sources: "джерел", failed: "недоступні", toggle_source: "Увімк/вимк джерело",
+    data_sources: "Джерела та метод",
+    agg_desc: "Агрегація: зважене середнє з придушенням викидів (температура), циркулярне середнє (вітер), медіана (опади), голосування (умови).",
+    no_keys: "Без API-ключів",
+    powered_by: "На основі",
+    aggregated: "Агрегат", precip_mm: "Опади (mm)",
+    refresh: "Оновити прогноз",
+    wmo_0: "Ясно", wmo_1: "Переважно ясно", wmo_2: "Мінлива хмарність", wmo_3: "Хмарно",
+    wmo_45: "Туман", wmo_48: "Паморозь",
+    wmo_51: "Легка мряка", wmo_53: "Мряка", wmo_55: "Сильна мряка",
+    wmo_56: "Крижана мряка", wmo_57: "Сильна крижана мряка",
+    wmo_61: "Невеликий дощ", wmo_63: "Дощ", wmo_65: "Сильний дощ",
+    wmo_66: "Крижаний дощ", wmo_67: "Сильний крижаний дощ",
+    wmo_71: "Невеликий сніг", wmo_73: "Сніг", wmo_75: "Сильний сніг", wmo_77: "Сніжні зерна",
+    wmo_80: "Короткочасний дощ", wmo_81: "Помірна злива", wmo_82: "Сильна злива",
+    wmo_85: "Сніговий заряд", wmo_86: "Сильний сніговий заряд",
+    wmo_95: "Гроза", wmo_96: "Гроза з градом", wmo_99: "Сильна гроза",
+    wmo_unknown: "Невідомо",
+  },
+};
+
+let currentLang = localStorage.getItem("mw_lang") || navigator.language?.slice(0, 2) || "en";
+if (!I18N[currentLang]) currentLang = "en";
+function t(key) { return I18N[currentLang]?.[key] ?? I18N.en[key] ?? key; }
+
 // ── Model Configuration ──────────────────────────────────────────────
 const MODELS = {
   ecmwf: {
@@ -413,34 +514,34 @@ const CURRENT_PARAMS = [
 
 // ── WMO Weather Code Mapping ─────────────────────────────────────────
 const WMO = {
-  0:  { icon: "\u2600\uFE0F",  desc: "Clear sky" },
-  1:  { icon: "\uD83C\uDF24\uFE0F", desc: "Mainly clear" },
-  2:  { icon: "\u26C5",  desc: "Partly cloudy" },
-  3:  { icon: "\u2601\uFE0F",  desc: "Overcast" },
-  45: { icon: "\uD83C\uDF2B\uFE0F", desc: "Fog" },
-  48: { icon: "\uD83C\uDF2B\uFE0F", desc: "Rime fog" },
-  51: { icon: "\uD83C\uDF26\uFE0F", desc: "Light drizzle" },
-  53: { icon: "\uD83C\uDF26\uFE0F", desc: "Drizzle" },
-  55: { icon: "\uD83C\uDF26\uFE0F", desc: "Dense drizzle" },
-  56: { icon: "\uD83C\uDF26\uFE0F", desc: "Freezing drizzle" },
-  57: { icon: "\uD83C\uDF26\uFE0F", desc: "Heavy freezing drizzle" },
-  61: { icon: "\uD83C\uDF27\uFE0F", desc: "Light rain" },
-  63: { icon: "\uD83C\uDF27\uFE0F", desc: "Rain" },
-  65: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy rain" },
-  66: { icon: "\uD83C\uDF27\uFE0F", desc: "Freezing rain" },
-  67: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy freezing rain" },
-  71: { icon: "\uD83C\uDF28\uFE0F", desc: "Light snow" },
-  73: { icon: "\uD83C\uDF28\uFE0F", desc: "Snow" },
-  75: { icon: "\u2744\uFE0F",  desc: "Heavy snow" },
-  77: { icon: "\u2744\uFE0F",  desc: "Snow grains" },
-  80: { icon: "\uD83C\uDF27\uFE0F", desc: "Rain showers" },
-  81: { icon: "\uD83C\uDF27\uFE0F", desc: "Moderate showers" },
-  82: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy showers" },
-  85: { icon: "\uD83C\uDF28\uFE0F", desc: "Snow showers" },
-  86: { icon: "\uD83C\uDF28\uFE0F", desc: "Heavy snow showers" },
-  95: { icon: "\u26C8\uFE0F",  desc: "Thunderstorm" },
-  96: { icon: "\u26C8\uFE0F",  desc: "Thunderstorm with hail" },
-  99: { icon: "\u26C8\uFE0F",  desc: "Severe thunderstorm" },
+  0:  { icon: "\u2600\uFE0F",  key: "wmo_0" },
+  1:  { icon: "\uD83C\uDF24\uFE0F", key: "wmo_1" },
+  2:  { icon: "\u26C5",  key: "wmo_2" },
+  3:  { icon: "\u2601\uFE0F",  key: "wmo_3" },
+  45: { icon: "\uD83C\uDF2B\uFE0F", key: "wmo_45" },
+  48: { icon: "\uD83C\uDF2B\uFE0F", key: "wmo_48" },
+  51: { icon: "\uD83C\uDF26\uFE0F", key: "wmo_51" },
+  53: { icon: "\uD83C\uDF26\uFE0F", key: "wmo_53" },
+  55: { icon: "\uD83C\uDF26\uFE0F", key: "wmo_55" },
+  56: { icon: "\uD83C\uDF26\uFE0F", key: "wmo_56" },
+  57: { icon: "\uD83C\uDF26\uFE0F", key: "wmo_57" },
+  61: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_61" },
+  63: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_63" },
+  65: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_65" },
+  66: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_66" },
+  67: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_67" },
+  71: { icon: "\uD83C\uDF28\uFE0F", key: "wmo_71" },
+  73: { icon: "\uD83C\uDF28\uFE0F", key: "wmo_73" },
+  75: { icon: "\u2744\uFE0F",  key: "wmo_75" },
+  77: { icon: "\u2744\uFE0F",  key: "wmo_77" },
+  80: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_80" },
+  81: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_81" },
+  82: { icon: "\uD83C\uDF27\uFE0F", key: "wmo_82" },
+  85: { icon: "\uD83C\uDF28\uFE0F", key: "wmo_85" },
+  86: { icon: "\uD83C\uDF28\uFE0F", key: "wmo_86" },
+  95: { icon: "\u26C8\uFE0F",  key: "wmo_95" },
+  96: { icon: "\u26C8\uFE0F",  key: "wmo_96" },
+  99: { icon: "\u26C8\uFE0F",  key: "wmo_99" },
 };
 
 // WWO code -> WMO code mapping (approximate)
@@ -460,7 +561,8 @@ const WWO_TO_WMO = {
 };
 
 function getWmo(code) {
-  return WMO[code] || WMO[Math.round(code)] || { icon: "\u2753", desc: "Unknown" };
+  const w = WMO[code] || WMO[Math.round(code)] || { icon: "\u2753", key: "wmo_unknown" };
+  return { icon: w.icon, desc: t(w.key) };
 }
 
 // ── Utility Functions ────────────────────────────────────────────────
@@ -854,9 +956,9 @@ function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSou
     const dt = new Date(date + "T12:00:00");
     return {
       date,
-      dayName: dt.toLocaleDateString("en-US", { weekday: "short" }),
+      dayName: dt.toLocaleDateString(currentLang, { weekday: "short" }),
       dayNum: dt.getDate(),
-      month: dt.toLocaleDateString("en-US", { month: "short" }),
+      month: dt.toLocaleDateString(currentLang, { month: "short" }),
       tempMax: allTemps.length ? round1(Math.max(...allTemps)) : null,
       tempMin: allTemps.length ? round1(Math.min(...allTemps)) : null,
       precipitation: Math.round(totalP * 10) / 10,
@@ -884,6 +986,27 @@ function fmtTemp(c, decimals = 1) {
   return v != null ? v.toFixed(decimals) : "\u2014";
 }
 function unitLabel() { return useFahrenheit ? "F" : "C"; }
+
+function setLang(lang) {
+  currentLang = lang;
+  localStorage.setItem("mw_lang", lang);
+  document.documentElement.lang = lang;
+  document.getElementById("lang-select").value = lang;
+  // Re-render all text
+  if (!gOpenMeteoResults) return;
+  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!agg) return;
+  renderHeader(agg, gOpenMeteoResults, gWttrResult, gMetNorwayResult, gLoc);
+  renderHero(agg.current);
+  renderTiles(agg.current);
+  buildChart(agg);
+  renderChartLegend(agg);
+  renderDaily(agg.daily);
+  renderFooter();
+  document.querySelector(".chart-header h2").textContent = t("temp_precip");
+  document.querySelector(".daily-section h2").textContent = t("daily_overview");
+  document.getElementById("chart-toggle").textContent = t(showModels ? "hide_models" : "show_models");
+}
 
 function setUnit(u) {
   useFahrenheit = (u === "F");
@@ -1008,7 +1131,7 @@ function buildChart(agg) {
               if (!items.length) return "";
               const t = items[0].label;
               const dt = new Date(t);
-              return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+              return dt.toLocaleDateString(currentLang, { weekday: "short", month: "short", day: "numeric" })
                 + "  " + t.slice(11, 16);
             },
             filter(item) {
@@ -1044,7 +1167,7 @@ function buildChart(agg) {
               const h = parseInt(label.slice(11, 13));
               if (h === 0) {
                 const d = new Date(label);
-                return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric" });
+                return d.toLocaleDateString(currentLang, { weekday: "short", day: "numeric" });
               }
               if (h === 12) return "12:00";
               return "";
@@ -1121,7 +1244,7 @@ function updateChartData(agg) {
 function toggleModels() {
   showModels = !showModels;
   const btn = document.getElementById("chart-toggle");
-  btn.textContent = showModels ? "Hide models" : "Show models";
+  btn.textContent = showModels ? t("hide_models") : t("show_models");
   btn.classList.toggle("active", showModels);
 
   // Toggle legend items
@@ -1164,9 +1287,9 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
   }
   document.getElementById("header-loc").textContent = `\uD83D\uDCCD ${locName}`;
 
-  let statusHtml = `${loc.lat.toFixed(4)}\u00B0N \u00B7 ${loc.lon.toFixed(4)}\u00B0E \u00B7 ${agg.timezone} \u00B7 \u25C9 ${totalOk}/${totalSrc} sources`;
+  let statusHtml = `${loc.lat.toFixed(4)}\u00B0N \u00B7 ${loc.lon.toFixed(4)}\u00B0E \u00B7 ${agg.timezone} \u00B7 \u25C9 ${totalOk}/${totalSrc} ${t("sources")}`;
   if (failNames.length > 0) {
-    statusHtml += `<span class="fail"> (${failNames.join(", ")} failed)</span>`;
+    statusHtml += `<span class="fail"> (${failNames.join(", ")} ${t("failed")})</span>`;
   }
   document.getElementById("header-coords").innerHTML = statusHtml;
 
@@ -1182,7 +1305,7 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
     badge.style.setProperty("--c", src.cfg.color);
     badge.textContent = src.cfg.name;
     if (src.ok) {
-      badge.title = `Click to toggle ${src.cfg.name} on chart`;
+      badge.title = t("toggle_source");
       badge.addEventListener("click", () => toggleSource(src.key, badge));
     }
     badges.appendChild(badge);
@@ -1197,15 +1320,15 @@ function renderHero(cur) {
   document.getElementById("hero-temp-val").textContent =
     cur.temperature != null ? `${fmtTemp(cur.temperature)}\u00B0` : "\u2014\u00B0";
   document.getElementById("hero-feels").textContent =
-    cur.feels_like != null ? `Feels like ${fmtTemp(cur.feels_like)}\u00B0${ul}` : "";
+    cur.feels_like != null ? `${t("feels_like")} ${fmtTemp(cur.feels_like)}\u00B0${ul}` : "";
 
   const meta = document.getElementById("hero-meta");
   const spreadDisp = useFahrenheit ? cur.spread * 9 / 5 : cur.spread;
   const spreadClass = cur.spread < 1 ? "spread-ok" : cur.spread < 2.5 ? "spread-mid" : "spread-bad";
   const confPct = Math.round((cur.confidence || 0) * 100);
   const confClass = confPct >= 80 ? "spread-ok" : confPct >= 50 ? "spread-mid" : "spread-bad";
-  meta.innerHTML = `<span>Confidence: <b class="${confClass}">${confPct}%</b></span>`
-    + `<span>Spread: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b></span>`;
+  meta.innerHTML = `<span>${t("confidence")}: <b class="${confClass}">${confPct}%</b></span>`
+    + `<span>${t("spread")}: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b></span>`;
 
   let existing = meta.parentElement.querySelector(".hero-meta-sources");
   if (!existing) { existing = document.createElement("div"); existing.className = "hero-meta-sources"; meta.after(existing); }
@@ -1218,10 +1341,10 @@ function renderHero(cur) {
 function renderTiles(cur) {
   const tiles = document.getElementById("tiles");
   const data = [
-    { icon: "\uD83D\uDCA7", label: "Humidity", value: cur.humidity != null ? cur.humidity.toFixed(0) : "\u2014", unit: "%" },
-    { icon: "\uD83D\uDCA8", label: "Wind", value: cur.wind != null ? cur.wind.toFixed(1) : "\u2014", unit: `m/s ${windDir(cur.windDir)}` },
-    { icon: "\uD83D\uDCCA", label: "Pressure", value: cur.pressure != null ? cur.pressure.toFixed(0) : "\u2014", unit: "hPa" },
-    { icon: "\u2601\uFE0F", label: "Clouds", value: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : "\u2014", unit: "%" },
+    { icon: "\uD83D\uDCA7", label: t("humidity"), value: cur.humidity != null ? cur.humidity.toFixed(0) : "\u2014", unit: "%" },
+    { icon: "\uD83D\uDCA8", label: t("wind"), value: cur.wind != null ? cur.wind.toFixed(1) : "\u2014", unit: `m/s ${windDir(cur.windDir)}` },
+    { icon: "\uD83D\uDCCA", label: t("pressure"), value: cur.pressure != null ? cur.pressure.toFixed(0) : "\u2014", unit: "hPa" },
+    { icon: "\u2601\uFE0F", label: t("clouds"), value: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : "\u2014", unit: "%" },
   ];
   tiles.innerHTML = data.map(t => `
     <div class="tile">
@@ -1238,7 +1361,7 @@ function renderChartLegend(agg) {
   // Aggregated (not hoverable)
   const aggItem = document.createElement("span");
   aggItem.className = "legend-item";
-  aggItem.innerHTML = `<span class="legend-line" style="background:#F8FAFC"></span> Aggregated`;
+  aggItem.innerHTML = `<span class="legend-line" style="background:#F8FAFC"></span> ${t("aggregated")}`;
   legend.appendChild(aggItem);
 
   // Per-source (hoverable — highlight on chart)
@@ -1257,7 +1380,7 @@ function renderChartLegend(agg) {
   // Precip
   const precItem = document.createElement("span");
   precItem.className = "legend-item";
-  precItem.innerHTML = `<span class="legend-box" style="background:rgba(96,165,250,0.55)"></span> Precip (mm)`;
+  precItem.innerHTML = `<span class="legend-box" style="background:rgba(96,165,250,0.55)"></span> ${t("precip_mm")}`;
   legend.appendChild(precItem);
 }
 
@@ -1286,7 +1409,7 @@ function renderDaily(daily) {
     const today = i === 0;
     return `
       <div class="day-card ${today ? "today" : ""}">
-        <div class="day-name">${today ? "Today" : d.dayName}</div>
+        <div class="day-name">${today ? t("today") : d.dayName}</div>
         <div class="day-date">${d.month} ${d.dayNum}</div>
         <div class="day-emoji">${w.icon}</div>
         <div class="day-desc">${w.desc}</div>
@@ -1305,7 +1428,7 @@ function renderDaily(daily) {
 
 function renderFooter() {
   const footer = document.getElementById("app-footer");
-  let html = `<div class="footer-title">Data Sources & Method</div>`;
+  let html = `<div class="footer-title">${t("data_sources")}</div>`;
   const allSrc = [...Object.entries(MODELS).map(([k, m]) => m), MET_NORWAY, WTTR];
   for (const m of allSrc) {
     html += `<div class="footer-model">
@@ -1313,16 +1436,12 @@ function renderFooter() {
       <b style="color:${m.color}">${m.name}</b> \u2014 ${m.desc} \u2014 weight ${m.weight}
     </div>`;
   }
-  html += `<div class="footer-divider">
-    Aggregation: agreement-aware weighted mean with outlier dampening (temperature),
-    circular mean (wind direction), median (precipitation), majority vote (conditions).
-    Confidence = mean agreement factor across sources.
-  </div>`;
+  html += `<div class="footer-divider">${t("agg_desc")}</div>`;
   html += `<div class="footer-powered">
-    Powered by <a href="https://open-meteo.com" target="_blank" rel="noreferrer">Open-Meteo.com</a>,
+    ${t("powered_by")} <a href="https://open-meteo.com" target="_blank" rel="noreferrer">Open-Meteo.com</a>,
     <a href="https://api.met.no" target="_blank" rel="noreferrer">MET Norway</a>
     & <a href="https://wttr.in" target="_blank" rel="noreferrer">wttr.in</a>
-    \u00B7 No API keys required
+    \u00B7 ${t("no_keys")}
     \u00B7 <a href="https://github.com/n0madic/metaweather" target="_blank" rel="noreferrer">GitHub</a>
   </div>`;
   footer.innerHTML = html;
@@ -1358,7 +1477,11 @@ async function refresh() {
 }
 
 async function main() {
-  const setStage = (s) => { document.getElementById("loader-stage").textContent = s; };
+  // Apply saved language
+  const loaderTitle = document.getElementById("loader-title");
+  loaderTitle.textContent = t("detecting");
+  document.getElementById("lang-select").value = currentLang;
+  document.documentElement.lang = currentLang;
 
   // Get location: use short-lived cache (30 min), then re-detect
   const FALLBACK = { lat: 50.4501, lon: 30.5234 };
@@ -1385,7 +1508,7 @@ async function main() {
     if (fromGeo) localStorage.setItem("mw_loc", JSON.stringify({ ...loc, ts: Date.now() }));
   }
 
-  setStage("Querying forecasts\u2026");
+  loaderTitle.textContent = t("gathering");
 
   // Fetch all sources in parallel
   const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
@@ -1394,7 +1517,7 @@ async function main() {
     fetchMetNorway(loc.lat, loc.lon),
   ]);
 
-  setStage("Aggregating\u2026");
+
 
   // Store globally for reaggregation
   gOpenMeteoResults = openMeteoResults;
@@ -1408,7 +1531,7 @@ async function main() {
     document.getElementById("loader").style.display = "none";
     const err = document.getElementById("error-screen");
     err.style.display = "flex";
-    err.textContent = "All weather sources failed. Please try again later.";
+    err.textContent = t("sources_failed");
     return;
   }
 
@@ -1430,6 +1553,10 @@ async function main() {
   renderChartLegend(agg);
   renderDaily(agg.daily);
   renderFooter();
+  // Localize static HTML headers
+  document.querySelector(".chart-header h2").textContent = t("temp_precip");
+  document.querySelector(".daily-section h2").textContent = t("daily_overview");
+  document.getElementById("chart-toggle").textContent = t(showModels ? "hide_models" : "show_models");
 }
 
 // Dismiss chart tooltip on touch outside canvas
