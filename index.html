@@ -972,7 +972,7 @@ function normalizeMetNorway(metData, refTimes, utcOffsetSec) {
   for (const entry of ts) {
     const utcMs = new Date(entry.time).getTime();
     const loc = new Date(utcMs + utcOffsetSec * 1000);
-    const key = `${loc.getFullYear()}-${String(loc.getMonth()+1).padStart(2,"0")}-${String(loc.getDate()).padStart(2,"0")}T${String(loc.getHours()).padStart(2,"0")}:${String(loc.getMinutes()).padStart(2,"0")}`;
+    const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
     const d = entry.data?.instant?.details;
     if (!d) continue;
     const sym = entry.data?.next_1_hours?.summary?.symbol_code
@@ -1030,7 +1030,7 @@ function normalizeTomorrowIo(tomorrowData, refTimes, utcOffsetSec) {
   for (const entry of hourly) {
     const utcMs = new Date(entry.time).getTime();
     const loc = new Date(utcMs + utcOffsetSec * 1000);
-    const key = `${loc.getFullYear()}-${String(loc.getMonth()+1).padStart(2,"0")}-${String(loc.getDate()).padStart(2,"0")}T${String(loc.getHours()).padStart(2,"0")}:${String(loc.getMinutes()).padStart(2,"0")}`;
+    const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
     const v = entry.values || {};
     hourlyMap[key] = {
       temperature_2m: v.temperature ?? null,
@@ -1038,7 +1038,7 @@ function normalizeTomorrowIo(tomorrowData, refTimes, utcOffsetSec) {
       pressure_msl: v.pressureSeaLevel ?? null,
       wind_speed_10m: v.windSpeed ?? null,
       wind_direction_10m: v.windDirection ?? null,
-      precipitation: v.precipitationIntensity ?? null,
+      precipitation: (v.rainIntensity || 0) + (v.snowIntensity || 0) + (v.sleetIntensity || 0) + (v.freezingRainIntensity || 0) || null,
       cloud_cover: v.cloudCover ?? null,
       weather_code: TOMORROW_TO_WMO[v.weatherCode] ?? null,
     };
@@ -1086,7 +1086,7 @@ function normalizeOWM(owmData, refTimes, utcOffsetSec) {
     const utcMs = entry.dt * 1000;
     for (let offset = 0; offset < 3; offset++) {
       const loc = new Date(utcMs + utcOffsetSec * 1000 + offset * 3600000);
-      const key = `${loc.getFullYear()}-${String(loc.getMonth()+1).padStart(2,"0")}-${String(loc.getDate()).padStart(2,"0")}T${String(loc.getHours()).padStart(2,"0")}:${String(loc.getMinutes()).padStart(2,"0")}`;
+      const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
       const rain3h = entry.rain?.["3h"] ?? 0;
       hourlyMap[key] = {
         temperature_2m: entry.main?.temp ?? null,
