@@ -1359,19 +1359,21 @@ async function main() {
   let loc = (cached && Date.now() - cached.ts < LOC_TTL) ? cached : null;
 
   if (!loc) {
+    let fromGeo = false;
     try {
       loc = await new Promise((resolve) => {
         if (!navigator.geolocation) { resolve(FALLBACK); return; }
         navigator.geolocation.getCurrentPosition(
-          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          (p) => { fromGeo = true; resolve({ lat: p.coords.latitude, lon: p.coords.longitude }); },
           () => resolve(FALLBACK),
-          { enableHighAccuracy: false, timeout: 5000, maximumAge: 600000 }
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 }
         );
       });
     } catch {
       loc = FALLBACK;
     }
-    localStorage.setItem("mw_loc", JSON.stringify({ ...loc, ts: Date.now() }));
+    // Only cache real geolocation, not fallback
+    if (fromGeo) localStorage.setItem("mw_loc", JSON.stringify({ ...loc, ts: Date.now() }));
   }
 
   setStage("Querying forecasts\u2026");
