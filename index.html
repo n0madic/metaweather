@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MetaWeather — Multi-Model Weather Aggregator</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg-primary: #070D1A;
+    --bg-secondary: #0F172A;
+    --bg-card: rgba(255,255,255,0.035);
+    --border: rgba(255,255,255,0.06);
+    --text-primary: #F8FAFC;
+    --text-secondary: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --text-faint: #475569;
+    --accent-blue: #38BDF8;
+    --accent-green: #34D399;
+    --accent-yellow: #FBBF24;
+    --accent-rain: #60A5FA;
+    --accent-red: #EF4444;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', -apple-system, system-ui, sans-serif;
+    background: linear-gradient(168deg, var(--bg-primary) 0%, var(--bg-secondary) 35%, #172554 70%, #1E1B4B 100%);
+    color: var(--text-secondary);
+    min-height: 100vh;
+    padding-bottom: 48px;
+  }
+
+  /* Loading */
+  #loader {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .spinner {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 28px;
+  }
+  .spinner-ring {
+    position: absolute;
+    border: 2px solid transparent;
+    border-radius: 50%;
+  }
+  .spinner-ring:nth-child(1) { inset: 0;  border-top-color: var(--accent-blue);   animation: orbit 1.0s linear infinite; }
+  .spinner-ring:nth-child(2) { inset: 6px;  border-top-color: var(--accent-green);  animation: orbit 1.4s linear infinite; }
+  .spinner-ring:nth-child(3) { inset: 12px; border-top-color: var(--accent-yellow); animation: orbit 1.8s linear infinite; }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+  .loader-title { font-size: 17px; font-weight: 600; color: var(--text-secondary); }
+  .loader-stage { font-size: 13px; color: var(--text-dim); margin-top: 6px; animation: pulse 2s ease infinite; }
+
+  /* Main layout */
+  #app { display: none; }
+  .container { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+
+  /* Header */
+  header {
+    padding: 18px 20px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .header-title { font-size: 21px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.4px; display: flex; align-items: center; gap: 8px; }
+  .refresh-btn {
+    width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.04);
+    background: rgba(255,255,255,0.03); color: var(--text-muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    transition: all 0.2s; flex-shrink: 0;
+  }
+  .refresh-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+  .refresh-btn.spinning { animation: orbit 0.8s linear infinite; pointer-events: none; opacity: 0.5; }
+  .header-coords { font-size: 11px; color: #334155; margin-top: 1px; }
+  .header-coords .fail { color: var(--accent-red); }
+  .model-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+  .model-badge {
+    font-size: 10px; padding: 3px 10px; border-radius: 20px;
+    font-weight: 600; cursor: pointer; transition: all 0.2s; user-select: none;
+  }
+  .model-badge.ok { background: color-mix(in srgb, var(--c) 8%, transparent); color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 20%, transparent); }
+  .model-badge.ok:hover { background: color-mix(in srgb, var(--c) 18%, transparent); }
+  .model-badge.ok.disabled { opacity: 0.35; text-decoration: line-through; }
+  .model-badge.fail { background: rgba(239,68,68,0.12); color: var(--accent-red); border: 1px solid rgba(239,68,68,0.25); cursor: default; }
+
+  /* Hero + Tiles combined */
+  .hero {
+    margin-top: 14px;
+    background: linear-gradient(135deg, rgba(56,189,248,0.07) 0%, rgba(30,27,75,0.25) 100%);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+  }
+  .unit-toggle {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+    font-size: 14px; font-weight: 600; user-select: none; margin-top: 2px;
+  }
+  .unit-toggle span {
+    cursor: pointer; padding: 0 4px; border-radius: 3px; transition: all 0.15s;
+    line-height: 1.2;
+  }
+  .unit-toggle span.active { color: var(--text-primary); }
+  .unit-toggle span:not(.active) { color: var(--text-dim); opacity: 0.5; }
+  .unit-toggle span:not(.active):hover { opacity: 0.8; }
+  .unit-toggle .sep { font-size: 9px; color: var(--text-dim); opacity: 0.3; cursor: default; padding: 0; }
+  .hero-icon { text-align: center; min-width: 70px; }
+  .hero-icon .emoji { font-size: 40px; line-height: 1; }
+  .hero-icon .desc { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .hero-temp { min-width: 0; }
+  .hero-temp .big {
+    font-size: 42px; font-weight: 800; color: var(--text-primary);
+    line-height: 1; letter-spacing: -2px; font-variant-numeric: tabular-nums;
+    display: flex; align-items: flex-start; gap: 4px;
+  }
+  .hero-temp .feels { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .hero-meta { margin-top: 6px; font-size: 10px; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 3px 8px; }
+  .hero-meta-sources { display: flex; flex-wrap: wrap; gap: 3px 8px; font-size: 10px; color: var(--text-faint); margin-top: 2px; }
+  .hero-meta .spread-ok { color: var(--accent-green); font-weight: 700; }
+  .hero-meta .spread-mid { color: var(--accent-yellow); font-weight: 700; }
+  .hero-meta .spread-bad { color: var(--accent-red); font-weight: 700; }
+
+  /* Metric tiles (inline in hero) */
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tile {
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+    padding: 6px 12px;
+  }
+  .tile-label {
+    font-size: 9px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .tile-value {
+    font-size: 16px; font-weight: 700; color: #F1F5F9;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile-value .unit { font-size: 10px; font-weight: 400; color: var(--text-muted); margin-left: 2px; }
+
+  @media (max-width: 700px) {
+    .hero { grid-template-columns: auto 1fr; }
+    .tiles { grid-column: 1 / -1; grid-template-columns: repeat(4, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* Chart section */
+  .chart-section {
+    margin-top: 12px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px 16px 10px;
+  }
+  .chart-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; flex-wrap: wrap; gap: 8px;
+  }
+  .chart-header h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .chart-toggle {
+    font-size: 11px; padding: 3px 11px; border-radius: 8px;
+    background: rgba(255,255,255,0.03); color: var(--text-dim);
+    border: 1px solid rgba(255,255,255,0.08); cursor: pointer;
+    transition: all 0.2s;
+  }
+  .chart-toggle.active { background: rgba(255,255,255,0.08); color: var(--text-secondary); }
+  .chart-canvas { width: 100%; height: 260px; }
+  .chart-legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    padding: 6px 4px 2px; font-size: 11px; color: var(--text-dim);
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; cursor: default; padding: 2px 4px; border-radius: 4px; transition: background 0.15s; }
+  .legend-item.hoverable { cursor: pointer; }
+  .legend-item.hoverable:hover { background: rgba(255,255,255,0.08); }
+  .legend-line { width: 18px; height: 3px; border-radius: 2px; }
+  .legend-dash { width: 18px; height: 0; border-top: 2px dashed; opacity: 0.55; }
+  .legend-box { width: 9px; height: 9px; border-radius: 2px; }
+
+  /* Daily cards */
+  .daily-section { margin-top: 12px; }
+  .daily-section h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
+  .daily-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 8px; }
+  .day-card {
+    background: var(--bg-card);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 14px;
+    padding: 14px 12px;
+    text-align: center;
+    transition: transform 0.15s;
+  }
+  .day-card:hover { transform: translateY(-2px); }
+  .day-card.today {
+    background: linear-gradient(135deg, rgba(56,189,248,0.1), rgba(30,27,75,0.18));
+    border-color: rgba(56,189,248,0.18);
+  }
+  .day-name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+  .day-card.today .day-name { color: var(--accent-blue); }
+  .day-date { font-size: 10px; color: var(--text-faint); margin-bottom: 6px; }
+  .day-emoji { font-size: 34px; line-height: 1; }
+  .day-desc { font-size: 10px; color: var(--text-muted); margin: 5px 0 8px; min-height: 24px; line-height: 1.3; }
+  .day-temps { font-size: 20px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .day-temps .lo { font-size: 13px; font-weight: 400; color: var(--text-dim); }
+  .day-extra { margin-top: 8px; display: flex; justify-content: center; gap: 10px; font-size: 10px; color: var(--text-faint); }
+  .day-extra .sm { font-size: 9px; }
+
+  /* Footer */
+  .app-footer {
+    margin-top: 28px;
+    padding: 14px 18px;
+    background: rgba(255,255,255,0.015);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 12px;
+    font-size: 11px;
+    color: #334155;
+    line-height: 1.8;
+  }
+  .footer-title { font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
+  .footer-model { display: flex; align-items: center; gap: 6px; }
+  .footer-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .footer-divider { margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 6px; color: var(--text-faint); }
+  .footer-powered { margin-top: 4px; color: var(--text-dim); }
+  .footer-powered a { color: var(--accent-blue); text-decoration: none; }
+
+  /* Error */
+  #error-screen {
+    display: none;
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-red);
+    font-size: 18px;
+  }
+
+  @media (max-width: 600px) {
+    .hero { padding: 12px; }
+    .hero-temp .big { font-size: 36px; }
+    .hero-icon .emoji { font-size: 32px; }
+    .chart-canvas { height: 200px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div id="loader">
+  <div class="spinner">
+    <div class="spinner-ring"></div>
+    <div class="spinner-ring"></div>
+    <div class="spinner-ring"></div>
+  </div>
+  <div class="loader-title">Gathering forecasts</div>
+  <div class="loader-stage" id="loader-stage">Detecting location...</div>
+</div>
+
+<!-- Error Screen -->
+<div id="error-screen"></div>
+
+<!-- Main App -->
+<div id="app">
+  <header>
+    <div>
+      <h1 class="header-title" id="header-title"><span id="header-loc"></span><button class="refresh-btn" id="refresh-btn" title="Refresh forecasts" onclick="refresh()">&#x21bb;</button></h1>
+      <div class="header-coords" id="header-coords"></div>
+    </div>
+    <div class="model-badges" id="model-badges"></div>
+  </header>
+
+  <div class="container">
+    <section class="hero" id="hero">
+      <div class="hero-icon">
+        <div class="emoji" id="hero-emoji"></div>
+        <div class="desc" id="hero-desc"></div>
+      </div>
+      <div class="hero-temp">
+        <div class="big"><span id="hero-temp-val"></span><div class="unit-toggle" id="unit-toggle"><span class="active" data-unit="C" onclick="setUnit('C')">C</span><span class="sep">&mdash;</span><span data-unit="F" onclick="setUnit('F')">F</span></div></div>
+        <div class="feels" id="hero-feels"></div>
+        <div class="hero-meta" id="hero-meta"></div>
+      </div>
+      <div class="tiles" id="tiles"></div>
+    </section>
+
+    <section class="chart-section">
+      <div class="chart-header">
+        <h2>Temperature & Precipitation</h2>
+        <button class="chart-toggle active" id="chart-toggle" onclick="toggleModels()">Hide models</button>
+      </div>
+      <div class="chart-canvas">
+        <canvas id="main-chart"></canvas>
+      </div>
+      <div class="chart-legend" id="chart-legend"></div>
+    </section>
+
+    <section class="daily-section">
+      <h2>Daily Overview</h2>
+      <div class="daily-grid" id="daily-grid"></div>
+    </section>
+
+    <footer class="app-footer" id="app-footer"></footer>
+  </div>
+</div>
+
+<script>
+// ── Model Configuration ──────────────────────────────────────────────
+const MODELS = {
+  ecmwf: {
+    name: "ECMWF IFS",
+    endpoint: "https://api.open-meteo.com/v1/ecmwf",
+    weight: 0.6,
+    color: "#38BDF8",
+    desc: "European Centre, 9km global (no current data)",
+  },
+  icon: {
+    name: "DWD ICON",
+    endpoint: "https://api.open-meteo.com/v1/dwd-icon",
+    weight: 1.0,
+    color: "#34D399",
+    desc: "German Weather Service, 7km Europe",
+  },
+  gfs: {
+    name: "NOAA GFS",
+    endpoint: "https://api.open-meteo.com/v1/gfs",
+    weight: 0.5,
+    color: "#FBBF24",
+    desc: "US Weather Service, 25km global",
+  },
+  meteofrance: {
+    name: "M\u00e9t\u00e9oFrance",
+    endpoint: "https://api.open-meteo.com/v1/meteofrance",
+    weight: 0.7,
+    color: "#A78BFA",
+    desc: "M\u00e9t\u00e9oFrance ARPEGE, 10km global",
+  },
+  gem: {
+    name: "GEM",
+    endpoint: "https://api.open-meteo.com/v1/gem",
+    weight: 0.85,
+    color: "#F472B6",
+    desc: "Canadian Met Centre, 25km global",
+  },
+};
+
+// Independent non-Open-Meteo sources
+const WTTR = {
+  name: "wttr.in",
+  weight: 0.45,
+  color: "#FB923C",
+  desc: "World Weather Online via wttr.in",
+};
+
+const MET_NORWAY = {
+  name: "MET Norway",
+  weight: 1.0,
+  color: "#2DD4BF",
+  desc: "Norwegian Met Institute, ECMWF post-processed",
+};
+
+// Yr.no symbol_code -> WMO weather code
+const YR_TO_WMO = {
+  clearsky: 0, fair: 1, partlycloudy: 2, cloudy: 3, fog: 45,
+  lightrainshowers: 80, rainshowers: 80, heavyrainshowers: 82,
+  lightrain: 61, rain: 63, heavyrain: 65,
+  lightrainandthunder: 95, rainandthunder: 95, heavyrainandthunder: 99,
+  lightsleet: 66, sleet: 66, heavysleet: 67,
+  lightsleetshowers: 66, sleetshowers: 66, heavysleetshowers: 67,
+  lightsnow: 71, snow: 73, heavysnow: 75,
+  lightsnowshowers: 85, snowshowers: 85, heavysnowshowers: 86,
+  lightrainshowersandthunder: 96, rainshowersandthunder: 96, heavyrainshowersandthunder: 99,
+  lightsnowandthunder: 95, snowandthunder: 95, heavysnowandthunder: 99,
+  lightsleetandthunder: 95, sleetandthunder: 95, heavysleetandthunder: 99,
+  lightssnowshowersandthunder: 96, snowshowersandthunder: 96, heavysnowshowersandthunder: 99,
+  lightsleetshowersandthunder: 96, sleetshowersandthunder: 96, heavysleetshowersandthunder: 99,
+};
+function yrSymbolToWmo(code) {
+  return YR_TO_WMO[code.replace(/_(day|night|polartwilight)$/, "")] ?? null;
+}
+
+const HOURLY_PARAMS = [
+  "temperature_2m", "relative_humidity_2m", "apparent_temperature",
+  "pressure_msl", "wind_speed_10m", "wind_direction_10m",
+  "precipitation", "cloud_cover", "weather_code",
+].join(",");
+
+const CURRENT_PARAMS = [
+  "temperature_2m", "relative_humidity_2m", "apparent_temperature",
+  "pressure_msl", "wind_speed_10m", "wind_direction_10m",
+  "cloud_cover", "weather_code",
+].join(",");
+
+// ── WMO Weather Code Mapping ─────────────────────────────────────────
+const WMO = {
+  0:  { icon: "\u2600\uFE0F",  desc: "Clear sky" },
+  1:  { icon: "\uD83C\uDF24\uFE0F", desc: "Mainly clear" },
+  2:  { icon: "\u26C5",  desc: "Partly cloudy" },
+  3:  { icon: "\u2601\uFE0F",  desc: "Overcast" },
+  45: { icon: "\uD83C\uDF2B\uFE0F", desc: "Fog" },
+  48: { icon: "\uD83C\uDF2B\uFE0F", desc: "Rime fog" },
+  51: { icon: "\uD83C\uDF26\uFE0F", desc: "Light drizzle" },
+  53: { icon: "\uD83C\uDF26\uFE0F", desc: "Drizzle" },
+  55: { icon: "\uD83C\uDF26\uFE0F", desc: "Dense drizzle" },
+  56: { icon: "\uD83C\uDF26\uFE0F", desc: "Freezing drizzle" },
+  57: { icon: "\uD83C\uDF26\uFE0F", desc: "Heavy freezing drizzle" },
+  61: { icon: "\uD83C\uDF27\uFE0F", desc: "Light rain" },
+  63: { icon: "\uD83C\uDF27\uFE0F", desc: "Rain" },
+  65: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy rain" },
+  66: { icon: "\uD83C\uDF27\uFE0F", desc: "Freezing rain" },
+  67: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy freezing rain" },
+  71: { icon: "\uD83C\uDF28\uFE0F", desc: "Light snow" },
+  73: { icon: "\uD83C\uDF28\uFE0F", desc: "Snow" },
+  75: { icon: "\u2744\uFE0F",  desc: "Heavy snow" },
+  77: { icon: "\u2744\uFE0F",  desc: "Snow grains" },
+  80: { icon: "\uD83C\uDF27\uFE0F", desc: "Rain showers" },
+  81: { icon: "\uD83C\uDF27\uFE0F", desc: "Moderate showers" },
+  82: { icon: "\uD83C\uDF27\uFE0F", desc: "Heavy showers" },
+  85: { icon: "\uD83C\uDF28\uFE0F", desc: "Snow showers" },
+  86: { icon: "\uD83C\uDF28\uFE0F", desc: "Heavy snow showers" },
+  95: { icon: "\u26C8\uFE0F",  desc: "Thunderstorm" },
+  96: { icon: "\u26C8\uFE0F",  desc: "Thunderstorm with hail" },
+  99: { icon: "\u26C8\uFE0F",  desc: "Severe thunderstorm" },
+};
+
+// WWO code -> WMO code mapping (approximate)
+const WWO_TO_WMO = {
+  113: 0, 116: 2, 119: 3, 122: 3,
+  143: 45, 176: 61, 179: 71, 182: 66,
+  185: 56, 200: 95, 227: 77, 230: 75,
+  248: 45, 260: 48, 263: 51, 266: 53,
+  281: 56, 284: 57, 293: 61, 296: 61,
+  299: 63, 302: 63, 305: 65, 308: 65,
+  311: 66, 314: 67, 317: 66, 320: 71,
+  323: 71, 326: 71, 329: 73, 332: 73,
+  335: 75, 338: 75, 350: 96, 353: 80,
+  356: 81, 359: 82, 362: 85, 365: 86,
+  368: 85, 371: 86, 374: 96, 377: 96,
+  386: 95, 389: 99, 392: 95, 395: 86,
+};
+
+function getWmo(code) {
+  return WMO[code] || WMO[Math.round(code)] || { icon: "\u2753", desc: "Unknown" };
+}
+
+// ── Utility Functions ────────────────────────────────────────────────
+function weightedMean(values, weights) {
+  let sw = 0, svw = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] != null && !isNaN(values[i])) {
+      svw += values[i] * weights[i];
+      sw += weights[i];
+    }
+  }
+  return sw > 0 ? svw / sw : null;
+}
+
+// Agreement-aware weighted mean: outliers near weighted median get dampened
+function smartMean(values, weights) {
+  const v = [], w = [];
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] != null && !isNaN(values[i])) { v.push(values[i]); w.push(weights[i]); }
+  }
+  if (!v.length) return { value: null, confidence: 0 };
+  if (v.length === 1) return { value: v[0], confidence: 0.5 };
+
+  // Weighted median
+  const pairs = v.map((val, i) => ({ val, w: w[i] })).sort((a, b) => a.val - b.val);
+  let cum = 0;
+  const totalW = w.reduce((s, x) => s + x, 0);
+  let med = pairs[pairs.length - 1].val;
+  for (const p of pairs) { cum += p.w; if (cum >= totalW / 2) { med = p.val; break; } }
+
+  // MAD (median absolute deviation)
+  const devs = v.map(x => Math.abs(x - med)).sort((a, b) => a - b);
+  const mad = Math.max(devs[Math.floor(devs.length / 2)], 0.1);
+
+  // Gaussian agreement weights (sigma=2 MADs)
+  const agreeW = v.map(x => Math.exp(-0.5 * ((Math.abs(x - med) / mad) / 2) ** 2));
+  const finalW = w.map((wi, i) => wi * agreeW[i]);
+  const sw = finalW.reduce((s, x) => s + x, 0);
+  const result = finalW.reduce((s, x, i) => s + v[i] * x, 0) / sw;
+  const confidence = agreeW.reduce((s, x) => s + x, 0) / agreeW.length;
+  return { value: result, confidence };
+}
+
+function arrMedian(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function circularMean(angles) {
+  if (!angles.length) return 0;
+  let sinSum = 0, cosSum = 0;
+  for (const a of angles) {
+    sinSum += Math.sin((a * Math.PI) / 180);
+    cosSum += Math.cos((a * Math.PI) / 180);
+  }
+  return ((Math.atan2(sinSum, cosSum) * 180) / Math.PI + 360) % 360;
+}
+
+function windDir(deg) {
+  const d = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  return d[Math.round(deg / 22.5) % 16];
+}
+
+function majorityVote(codes, weights) {
+  const m = {};
+  for (let i = 0; i < codes.length; i++) {
+    if (codes[i] != null) m[codes[i]] = (m[codes[i]] || 0) + weights[i];
+  }
+  let best = 0, bw = -1;
+  for (const [c, w] of Object.entries(m)) { if (w > bw) { best = +c; bw = w; } }
+  return best;
+}
+
+function round1(v) { return v != null ? Math.round(v * 10) / 10 : null; }
+function safeNum(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
+
+// ── Data Fetching ────────────────────────────────────────────────────
+async function fetchModel(key, lat, lon) {
+  const cfg = MODELS[key];
+  const params = new URLSearchParams({
+    latitude: lat.toFixed(4),
+    longitude: lon.toFixed(4),
+    hourly: HOURLY_PARAMS,
+    current: CURRENT_PARAMS,
+    wind_speed_unit: "ms",
+    forecast_days: "5",
+    timezone: "auto",
+  });
+  try {
+    const res = await fetch(`${cfg.endpoint}?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { key, data: await res.json(), ok: true };
+  } catch (err) {
+    return { key, data: null, ok: false, error: err.message };
+  }
+}
+
+// ── wttr.in Fetching & Normalization ─────────────────────────────────
+async function fetchWttrIn(lat, lon) {
+  try {
+    const url = `https://wttr.in/${lat.toFixed(4)},${lon.toFixed(4)}?format=j1`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function normalizeWttrIn(wttrData, refTimes) {
+  // Build a time-indexed map of wttr.in hourly data
+  const hourlyMap = {};
+  for (const day of wttrData.weather || []) {
+    const dateStr = day.date; // "2026-03-27"
+    for (const h of day.hourly || []) {
+      const hh = String(Math.floor(parseInt(h.time) / 100)).padStart(2, "0");
+      const timeKey = `${dateStr}T${hh}:00`;
+      hourlyMap[timeKey] = {
+        temperature_2m: safeNum(h.tempC),
+        relative_humidity_2m: safeNum(h.humidity),
+        apparent_temperature: safeNum(h.FeelsLikeC),
+        pressure_msl: safeNum(h.pressure),
+        wind_speed_10m: safeNum(h.windspeedKmph) != null ? safeNum(h.windspeedKmph) / 3.6 : null, // km/h -> m/s
+        wind_direction_10m: safeNum(h.winddirDegree),
+        precipitation: safeNum(h.precipMM),
+        cloud_cover: safeNum(h.cloudcover),
+        weather_code: WWO_TO_WMO[parseInt(h.weatherCode)] ?? null,
+      };
+    }
+  }
+
+  // Build arrays aligned to refTimes
+  const result = {
+    time: refTimes,
+    temperature_2m: [],
+    relative_humidity_2m: [],
+    apparent_temperature: [],
+    pressure_msl: [],
+    wind_speed_10m: [],
+    wind_direction_10m: [],
+    precipitation: [],
+    cloud_cover: [],
+    weather_code: [],
+  };
+
+  for (const t of refTimes) {
+    const entry = hourlyMap[t];
+    for (const param of Object.keys(result)) {
+      if (param === "time") continue;
+      result[param].push(entry ? entry[param] : null);
+    }
+  }
+
+  // Current conditions
+  const cc = wttrData.current_condition?.[0];
+  const current = cc ? {
+    temperature_2m: safeNum(cc.temp_C),
+    relative_humidity_2m: safeNum(cc.humidity),
+    apparent_temperature: safeNum(cc.FeelsLikeC),
+    pressure_msl: safeNum(cc.pressure),
+    wind_speed_10m: safeNum(cc.windspeedKmph) != null ? safeNum(cc.windspeedKmph) / 3.6 : null,
+    wind_direction_10m: safeNum(cc.winddirDegree),
+    cloud_cover: safeNum(cc.cloudcover),
+    weather_code: WWO_TO_WMO[parseInt(cc.weatherCode)] ?? null,
+  } : null;
+
+  return { hourly: result, current };
+}
+
+// ── MET Norway Fetching & Normalization ──────────────────────────────
+async function fetchMetNorway(lat, lon) {
+  try {
+    const url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { ok: true, data: await res.json() };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function normalizeMetNorway(metData, refTimes, utcOffsetSec) {
+  const ts = metData.properties?.timeseries;
+  if (!ts?.length) return null;
+
+  // Build time-indexed map (UTC -> local time)
+  const hourlyMap = {};
+  for (const entry of ts) {
+    const utcMs = new Date(entry.time).getTime();
+    const loc = new Date(utcMs + utcOffsetSec * 1000);
+    const key = `${loc.getFullYear()}-${String(loc.getMonth()+1).padStart(2,"0")}-${String(loc.getDate()).padStart(2,"0")}T${String(loc.getHours()).padStart(2,"0")}:${String(loc.getMinutes()).padStart(2,"0")}`;
+    const d = entry.data?.instant?.details;
+    if (!d) continue;
+    const sym = entry.data?.next_1_hours?.summary?.symbol_code
+      ?? entry.data?.next_6_hours?.summary?.symbol_code;
+    hourlyMap[key] = {
+      temperature_2m: d.air_temperature ?? null,
+      relative_humidity_2m: d.relative_humidity ?? null,
+      pressure_msl: d.air_pressure_at_sea_level ?? null,
+      wind_speed_10m: d.wind_speed ?? null,
+      wind_direction_10m: d.wind_from_direction ?? null,
+      precipitation: entry.data?.next_1_hours?.details?.precipitation_amount ?? null,
+      cloud_cover: d.cloud_area_fraction ?? null,
+      weather_code: sym ? yrSymbolToWmo(sym) : null,
+    };
+  }
+
+  const result = { time: refTimes, temperature_2m: [], relative_humidity_2m: [], pressure_msl: [], wind_speed_10m: [], wind_direction_10m: [], precipitation: [], cloud_cover: [], weather_code: [] };
+  for (const t of refTimes) {
+    const e = hourlyMap[t];
+    for (const p of Object.keys(result)) { if (p !== "time") result[p].push(e ? e[p] : null); }
+  }
+
+  const f = ts[0]?.data?.instant?.details;
+  const fSym = ts[0]?.data?.next_1_hours?.summary?.symbol_code;
+  const current = f ? {
+    temperature_2m: f.air_temperature ?? null, relative_humidity_2m: f.relative_humidity ?? null,
+    pressure_msl: f.air_pressure_at_sea_level ?? null, wind_speed_10m: f.wind_speed ?? null,
+    wind_direction_10m: f.wind_from_direction ?? null, cloud_cover: f.cloud_area_fraction ?? null,
+    weather_code: fSym ? yrSymbolToWmo(fSym) : null,
+  } : null;
+  return { hourly: result, current };
+}
+
+// ── Aggregation ──────────────────────────────────────────────────────
+function aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources = new Set()) {
+  const allOk = openMeteoResults.filter((r) => r.ok && r.data?.hourly);
+  const valid = allOk.filter((r) => !disabledSources.has(r.key));
+  const anyIndependent = (wttrResult?.ok && !disabledSources.has("wttr"))
+    || (metNorwayResult?.ok && !disabledSources.has("met_norway"));
+  if (!valid.length && !anyIndependent) return null;
+
+  const refSource = allOk[0] || valid[0];
+  if (!refSource) return null;
+  const times = refSource.data.hourly.time;
+  const utcOffset = refSource.data.utc_offset_seconds || 0;
+
+  // Normalize independent sources
+  const wttrHasData = wttrResult?.ok && wttrResult.data;
+  const wttrNorm = wttrHasData ? normalizeWttrIn(wttrResult.data, times) : null;
+  const wttr = (wttrHasData && !disabledSources.has("wttr")) ? wttrNorm : null;
+
+  const metHasData = metNorwayResult?.ok && metNorwayResult.data;
+  const metNorm = metHasData ? normalizeMetNorway(metNorwayResult.data, times, utcOffset) : null;
+  const met = (metHasData && !disabledSources.has("met_norway")) ? metNorm : null;
+
+  // All keys for chart (including disabled, for line display)
+  const allChartKeys = [...allOk.map(r => r.key)];
+  if (wttrHasData) allChartKeys.push("wttr");
+  if (metHasData) allChartKeys.push("met_norway");
+
+  // Helper: collect value+weight from an independent source
+  function pushIndep(norm, weight, param, i, vals, ws) {
+    const v = norm.hourly[param]?.[i];
+    if (v != null) { vals.push(v); ws.push(weight); }
+  }
+
+  // Hourly aggregation
+  let confidenceSum = 0, confidenceN = 0;
+  const hourly = times.map((t, i) => {
+    const row = { time: t };
+    const temps = [], humids = [], pressures = [], winds = [];
+    const wdirs = [], precips = [], clouds = [], codes = [];
+    const tW = [], hW = [], pW = [], wW = [], wdW = [], clW = [], coW = [];
+
+    // Chart line data for ALL responding sources
+    for (const r of allOk) row[`temp_${r.key}`] = r.data.hourly.temperature_2m?.[i] ?? null;
+    if (wttrNorm) row.temp_wttr = wttrNorm.hourly.temperature_2m[i];
+    if (metNorm) row.temp_met_norway = metNorm.hourly.temperature_2m[i];
+
+    // Enabled Open-Meteo models
+    for (const r of valid) {
+      const h = r.data.hourly, w = MODELS[r.key].weight;
+      if (h.temperature_2m?.[i] != null) { temps.push(h.temperature_2m[i]); tW.push(w); }
+      if (h.relative_humidity_2m?.[i] != null) { humids.push(h.relative_humidity_2m[i]); hW.push(w); }
+      if (h.pressure_msl?.[i] != null) { pressures.push(h.pressure_msl[i]); pW.push(w); }
+      if (h.wind_speed_10m?.[i] != null) { winds.push(h.wind_speed_10m[i]); wW.push(w); }
+      if (h.wind_direction_10m?.[i] != null) { wdirs.push(h.wind_direction_10m[i]); wdW.push(w); }
+      if (h.precipitation?.[i] != null) precips.push(h.precipitation[i]);
+      if (h.cloud_cover?.[i] != null) { clouds.push(h.cloud_cover[i]); clW.push(w); }
+      if (h.weather_code?.[i] != null) { codes.push(h.weather_code[i]); coW.push(w); }
+    }
+    // wttr.in
+    if (wttr) {
+      const w = WTTR.weight;
+      pushIndep(wttr, w, "temperature_2m", i, temps, tW);
+      pushIndep(wttr, w, "relative_humidity_2m", i, humids, hW);
+      pushIndep(wttr, w, "pressure_msl", i, pressures, pW);
+      pushIndep(wttr, w, "wind_speed_10m", i, winds, wW);
+      pushIndep(wttr, w, "wind_direction_10m", i, wdirs, wdW);
+      if (wttr.hourly.precipitation[i] != null) precips.push(wttr.hourly.precipitation[i]);
+      pushIndep(wttr, w, "cloud_cover", i, clouds, clW);
+      if (wttr.hourly.weather_code[i] != null) { codes.push(wttr.hourly.weather_code[i]); coW.push(w); }
+    }
+    // MET Norway
+    if (met) {
+      const w = MET_NORWAY.weight;
+      pushIndep(met, w, "temperature_2m", i, temps, tW);
+      pushIndep(met, w, "relative_humidity_2m", i, humids, hW);
+      pushIndep(met, w, "pressure_msl", i, pressures, pW);
+      pushIndep(met, w, "wind_speed_10m", i, winds, wW);
+      pushIndep(met, w, "wind_direction_10m", i, wdirs, wdW);
+      if (met.hourly.precipitation[i] != null) precips.push(met.hourly.precipitation[i]);
+      pushIndep(met, w, "cloud_cover", i, clouds, clW);
+      if (met.hourly.weather_code[i] != null) { codes.push(met.hourly.weather_code[i]); coW.push(w); }
+    }
+
+    // Agreement-aware aggregation for temperature
+    const tempResult = smartMean(temps, tW);
+    row.temp_agg = tempResult.value != null ? round1(tempResult.value) : null;
+    row.confidence = tempResult.confidence;
+    confidenceSum += tempResult.confidence; confidenceN++;
+
+    row.temp_min = temps.length ? Math.min(...temps) : null;
+    row.temp_max = temps.length ? Math.max(...temps) : null;
+    row.humidity = weightedMean(humids, hW);
+    row.pressure = weightedMean(pressures, pW);
+    row.wind = weightedMean(winds, wW);
+    row.windDir = wdirs.length ? circularMean(wdirs) : 0;
+    // Precipitation: median (robust to outliers), filter noise < 0.1mm
+    const sigPrecip = precips.filter(v => v >= 0.1);
+    row.precipitation = sigPrecip.length ? round1(arrMedian(sigPrecip)) : 0;
+    row.precipConsensus = precips.length ? Math.round(sigPrecip.length / precips.length * 100) : 0;
+    row.cloud_cover = weightedMean(clouds, clW);
+    row.weather_code = codes.length ? majorityVote(codes, coW) : 0;
+    return row;
+  });
+
+  // Current weather
+  const cV = { temps: [], feels: [], humids: [], press: [], winds: [], wdirs: [], codes: [], clouds: [] };
+  const cW = { temps: [], feels: [], humids: [], press: [], winds: [], wdirs: [], codes: [], clouds: [] };
+  function pushCurrent(src, weight) {
+    if (!src) return;
+    if (src.temperature_2m != null) { cV.temps.push(src.temperature_2m); cW.temps.push(weight); }
+    if (src.apparent_temperature != null) { cV.feels.push(src.apparent_temperature); cW.feels.push(weight); }
+    if (src.relative_humidity_2m != null) { cV.humids.push(src.relative_humidity_2m); cW.humids.push(weight); }
+    if (src.pressure_msl != null) { cV.press.push(src.pressure_msl); cW.press.push(weight); }
+    if (src.wind_speed_10m != null) { cV.winds.push(src.wind_speed_10m); cW.winds.push(weight); }
+    if (src.wind_direction_10m != null) { cV.wdirs.push(src.wind_direction_10m); cW.wdirs.push(weight); }
+    if (src.weather_code != null) { cV.codes.push(src.weather_code); cW.codes.push(weight); }
+    if (src.cloud_cover != null) { cV.clouds.push(src.cloud_cover); cW.clouds.push(weight); }
+  }
+  for (const r of valid) pushCurrent(r.data.current, MODELS[r.key].weight);
+  if (wttr) pushCurrent(wttr.current, WTTR.weight);
+  if (met) pushCurrent(met.current, MET_NORWAY.weight);
+
+  const perModel = [];
+  for (const r of valid) perModel.push({ key: r.key, temp: r.data.current?.temperature_2m ?? null });
+  if (wttr?.current?.temperature_2m != null) perModel.push({ key: "wttr", temp: wttr.current.temperature_2m });
+  if (met?.current?.temperature_2m != null) perModel.push({ key: "met_norway", temp: met.current.temperature_2m });
+
+  const curTempResult = smartMean(cV.temps, cW.temps);
+  const current = {
+    temperature: curTempResult.value,
+    feels_like: weightedMean(cV.feels, cW.feels),
+    humidity: weightedMean(cV.humids, cW.humids),
+    pressure: weightedMean(cV.press, cW.press),
+    wind: weightedMean(cV.winds, cW.winds),
+    windDir: cV.wdirs.length ? circularMean(cV.wdirs) : 0,
+    weather_code: cV.codes.length ? majorityVote(cV.codes, cW.codes) : 0,
+    cloud_cover: weightedMean(cV.clouds, cW.clouds),
+    spread: cV.temps.length > 1 ? Math.max(...cV.temps) - Math.min(...cV.temps) : 0,
+    confidence: curTempResult.confidence,
+    sourceCount: valid.length + (wttr ? 1 : 0) + (met ? 1 : 0),
+    perModel,
+  };
+
+  // Daily summaries
+  const dayMap = {};
+  for (const h of hourly) {
+    const dk = h.time.slice(0, 10);
+    if (!dayMap[dk]) dayMap[dk] = [];
+    dayMap[dk].push(h);
+  }
+
+  const daily = Object.entries(dayMap).map(([date, pts]) => {
+    const allTemps = pts.map((p) => p.temp_agg).filter((v) => v != null);
+    const dayPts = pts.filter((p) => { const hr = parseInt(p.time.slice(11, 13)); return hr >= 7 && hr <= 20; });
+    const dayCodes = dayPts.map((p) => p.weather_code).filter((v) => v != null);
+    const totalP = pts.reduce((s, p) => s + (p.precipitation || 0), 0);
+    const maxW = Math.max(0, ...pts.map((p) => p.wind || 0));
+    const dt = new Date(date + "T12:00:00");
+    return {
+      date,
+      dayName: dt.toLocaleDateString("en-US", { weekday: "short" }),
+      dayNum: dt.getDate(),
+      month: dt.toLocaleDateString("en-US", { month: "short" }),
+      tempMax: allTemps.length ? round1(Math.max(...allTemps)) : null,
+      tempMin: allTemps.length ? round1(Math.min(...allTemps)) : null,
+      precipitation: Math.round(totalP * 10) / 10,
+      maxWind: round1(maxW),
+      weather_code: dayCodes.length ? majorityVote(dayCodes, dayCodes.map(() => 1)) : 0,
+    };
+  });
+
+  const chart = hourly.filter((_, i) => i % 3 === 0);
+  return { current, hourly, chart, daily, timezone: refSource.data.timezone, modelKeys: allChartKeys };
+}
+
+// ── All sources config for display ───────────────────────────────────
+function getSourceConfig(key) {
+  if (key === "wttr") return WTTR;
+  if (key === "met_norway") return MET_NORWAY;
+  return MODELS[key];
+}
+
+// ── Temperature Unit ─────────────────────────────────────────────────
+let useFahrenheit = false;
+function toDisplay(c) { return c != null ? (useFahrenheit ? c * 9 / 5 + 32 : c) : null; }
+function fmtTemp(c, decimals = 1) {
+  const v = toDisplay(c);
+  return v != null ? v.toFixed(decimals) : "\u2014";
+}
+function unitLabel() { return useFahrenheit ? "F" : "C"; }
+
+function setUnit(u) {
+  useFahrenheit = (u === "F");
+  document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
+    el.classList.toggle("active", el.dataset.unit === u);
+  });
+  // Rebuild chart (axis labels change) and re-render
+  if (!gOpenMeteoResults) return;
+  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!agg) return;
+  renderHero(agg.current);
+  renderTiles(agg.current);
+  buildChart(agg);
+  renderChartLegend(agg);
+  renderDaily(agg.daily);
+}
+
+// ── Global State (for reaggregation) ─────────────────────────────────
+let gOpenMeteoResults = null;
+let gWttrResult = null;
+let gMetNorwayResult = null;
+let gLoc = null;
+const disabledSources = new Set();
+
+// ── Chart ────────────────────────────────────────────────────────────
+let mainChart = null;
+let showModels = true;
+
+function buildChart(agg) {
+  const ctx = document.getElementById("main-chart").getContext("2d");
+  const data = agg.chart;
+  const labels = data.map(d => d.time);
+
+  const datasets = [];
+
+  // Per-model lines (dashed)
+  for (const k of agg.modelKeys) {
+    const cfg = getSourceConfig(k);
+    datasets.push({
+      label: cfg.name,
+      data: data.map(d => toDisplay(d[`temp_${k}`])),
+      borderColor: cfg.color + "40",
+      borderWidth: 1,
+      borderDash: [5, 3],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0.3,
+      yAxisID: "y",
+      hidden: !showModels,
+      order: 2,
+    });
+  }
+
+  // Aggregated line (solid white, on top)
+  datasets.push({
+    label: "Aggregated",
+    data: data.map(d => toDisplay(d.temp_agg)),
+    borderColor: "#F8FAFC",
+    borderWidth: 2.5,
+    pointRadius: 0,
+    pointHoverRadius: 5,
+    pointHoverBackgroundColor: "#F8FAFC",
+    pointHoverBorderColor: "#0F172A",
+    pointHoverBorderWidth: 2,
+    tension: 0.3,
+    yAxisID: "y",
+    fill: true,
+    backgroundColor: (ctx) => {
+      const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
+      gradient.addColorStop(0, "rgba(56,189,248,0.10)");
+      gradient.addColorStop(1, "rgba(56,189,248,0.01)");
+      return gradient;
+    },
+    order: 1,
+  });
+
+  // Precipitation bars
+  datasets.push({
+    label: "Precipitation",
+    data: data.map(d => d.precipitation),
+    type: "bar",
+    backgroundColor: "rgba(96,165,250,0.55)",
+    borderRadius: 2,
+    barPercentage: 0.6,
+    yAxisID: "y1",
+    order: 3,
+  });
+
+  if (mainChart) mainChart.destroy();
+
+  mainChart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 0 },
+      transitions: {
+        reaggregate: { animation: { duration: 500, easing: "easeInOutCubic" } },
+      },
+      interaction: {
+        mode: "index",
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "rgba(8,15,30,0.96)",
+          borderColor: "rgba(255,255,255,0.1)",
+          borderWidth: 1,
+          cornerRadius: 10,
+          padding: 12,
+          titleColor: "#94A3B8",
+          titleFont: { size: 11, weight: "600" },
+          bodyColor: "#CBD5E1",
+          bodyFont: { size: 12 },
+          callbacks: {
+            title(items) {
+              if (!items.length) return "";
+              const t = items[0].label;
+              const dt = new Date(t);
+              return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+                + "  " + t.slice(11, 16);
+            },
+            filter(item) {
+              return item.raw != null && (item.dataset.label !== "Precipitation" || item.raw > 0);
+            },
+            label(item) {
+              if (item.dataset.label === "Precipitation") {
+                return `\uD83D\uDCA7 ${item.raw.toFixed(1)} mm`;
+              }
+              return `${item.dataset.label}: ${item.raw.toFixed(1)}\u00B0${unitLabel()}`;
+            },
+            labelColor(item) {
+              return {
+                borderColor: item.dataset.borderColor || item.dataset.backgroundColor,
+                backgroundColor: item.dataset.borderColor || item.dataset.backgroundColor,
+                borderRadius: 3,
+                borderWidth: 0,
+              };
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: "rgba(255,255,255,0.04)", drawBorder: false },
+          ticks: {
+            color: "#475569",
+            font: { size: 10 },
+            maxRotation: 0,
+            callback(val, idx) {
+              const label = this.getLabelForValue(val);
+              if (!label) return "";
+              const h = parseInt(label.slice(11, 13));
+              if (h === 0) {
+                const d = new Date(label);
+                return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric" });
+              }
+              if (h === 12) return "12:00";
+              return "";
+            },
+          },
+        },
+        y: {
+          position: "left",
+          grid: { color: "rgba(255,255,255,0.04)", drawBorder: false },
+          ticks: {
+            color: "#64748B",
+            font: { size: 10 },
+            callback: v => `${v}\u00B0`,
+          },
+        },
+        y1: {
+          position: "right",
+          beginAtZero: true,
+          grid: { display: false },
+          ticks: {
+            color: "rgba(59,130,246,0.6)",
+            font: { size: 9 },
+            callback: v => v > 0 ? `${v}` : "",
+          },
+        },
+      },
+    },
+  });
+}
+
+function toggleSource(key, badge) {
+  if (!gOpenMeteoResults) return;
+  if (disabledSources.has(key)) {
+    disabledSources.delete(key);
+  } else {
+    disabledSources.add(key);
+  }
+  badge.classList.toggle("disabled", disabledSources.has(key));
+  reaggregate();
+}
+
+function reaggregate() {
+  const agg = aggregateAll(gOpenMeteoResults, gWttrResult, gMetNorwayResult, disabledSources);
+  if (!agg) return;
+  renderHero(agg.current);
+  renderTiles(agg.current);
+  updateChartData(agg);
+  renderDaily(agg.daily);
+}
+
+function updateChartData(agg) {
+  if (!mainChart) { buildChart(agg); return; }
+  const data = agg.chart;
+  for (const ds of mainChart.data.datasets) {
+    if (ds.label === "Aggregated") {
+      ds.data = data.map(d => toDisplay(d.temp_agg));
+    } else if (ds.label === "Precipitation") {
+      ds.data = data.map(d => d.precipitation);
+    } else {
+      for (const k of agg.modelKeys) {
+        if (ds.label === getSourceConfig(k).name) {
+          ds.data = data.map(d => toDisplay(d[`temp_${k}`]));
+          break;
+        }
+      }
+    }
+  }
+  mainChart.update("reaggregate");
+}
+
+function toggleModels() {
+  showModels = !showModels;
+  const btn = document.getElementById("chart-toggle");
+  btn.textContent = showModels ? "Hide models" : "Show models";
+  btn.classList.toggle("active", showModels);
+
+  if (!mainChart) return;
+  for (const ds of mainChart.data.datasets) {
+    if (ds.label !== "Aggregated" && ds.label !== "Precipitation") {
+      ds.hidden = !showModels;
+    }
+  }
+  mainChart.update();
+}
+
+// ── Render Functions ─────────────────────────────────────────────────
+function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
+  const omOk = openMeteoResults.filter(r => r.ok).length;
+  const indepOk = (wttrResult?.ok ? 1 : 0) + (metNorwayResult?.ok ? 1 : 0);
+  const totalOk = omOk + indepOk;
+  const totalSrc = Object.keys(MODELS).length + 2; // +2 for wttr.in + MET Norway
+  const failed = openMeteoResults.filter(r => !r.ok);
+  const failNames = failed.map(f => MODELS[f.key]?.name);
+  if (!wttrResult?.ok) failNames.push(WTTR.name);
+  if (!metNorwayResult?.ok) failNames.push(MET_NORWAY.name);
+
+  let locName;
+  if (agg.timezone) {
+    const p = agg.timezone.split("/");
+    locName = p[p.length - 1].replace(/_/g, " ");
+  } else {
+    locName = `${loc.lat.toFixed(2)}\u00B0, ${loc.lon.toFixed(2)}\u00B0`;
+  }
+  if (wttrResult?.ok && wttrResult.data?.nearest_area?.[0]) {
+    const area = wttrResult.data.nearest_area[0];
+    const city = area.areaName?.[0]?.value;
+    const country = area.country?.[0]?.value;
+    if (city) locName = country ? `${city}, ${country}` : city;
+  }
+  document.getElementById("header-loc").textContent = `\uD83D\uDCCD ${locName}`;
+
+  let statusHtml = `${loc.lat.toFixed(4)}\u00B0N \u00B7 ${loc.lon.toFixed(4)}\u00B0E \u00B7 ${agg.timezone} \u00B7 \u25C9 ${totalOk}/${totalSrc} sources`;
+  if (failNames.length > 0) {
+    statusHtml += `<span class="fail"> (${failNames.join(", ")} failed)</span>`;
+  }
+  document.getElementById("header-coords").innerHTML = statusHtml;
+
+  const badges = document.getElementById("model-badges");
+  badges.innerHTML = "";
+  const allSources = [...Object.entries(MODELS).map(([k, m]) => ({ key: k, cfg: m, ok: openMeteoResults.find(r => r.key === k)?.ok })),
+    { key: "met_norway", cfg: MET_NORWAY, ok: metNorwayResult?.ok },
+    { key: "wttr", cfg: WTTR, ok: wttrResult?.ok }];
+  for (const src of allSources) {
+    const badge = document.createElement("span");
+    const isDisabled = src.ok && disabledSources.has(src.key);
+    badge.className = `model-badge ${src.ok ? "ok" : "fail"}${isDisabled ? " disabled" : ""}`;
+    badge.style.setProperty("--c", src.cfg.color);
+    badge.textContent = src.cfg.name;
+    if (src.ok) {
+      badge.title = `Click to toggle ${src.cfg.name} on chart`;
+      badge.addEventListener("click", () => toggleSource(src.key, badge));
+    }
+    badges.appendChild(badge);
+  }
+}
+
+function renderHero(cur) {
+  const wmo = getWmo(cur.weather_code);
+  const ul = unitLabel();
+  document.getElementById("hero-emoji").textContent = wmo.icon;
+  document.getElementById("hero-desc").textContent = wmo.desc;
+  document.getElementById("hero-temp-val").textContent =
+    cur.temperature != null ? `${fmtTemp(cur.temperature)}\u00B0` : "\u2014\u00B0";
+  document.getElementById("hero-feels").textContent =
+    cur.feels_like != null ? `Feels like ${fmtTemp(cur.feels_like)}\u00B0${ul}` : "";
+
+  const meta = document.getElementById("hero-meta");
+  const spreadDisp = useFahrenheit ? cur.spread * 9 / 5 : cur.spread;
+  const spreadClass = cur.spread < 1 ? "spread-ok" : cur.spread < 2.5 ? "spread-mid" : "spread-bad";
+  const confPct = Math.round((cur.confidence || 0) * 100);
+  const confClass = confPct >= 80 ? "spread-ok" : confPct >= 50 ? "spread-mid" : "spread-bad";
+  meta.innerHTML = `<span>Confidence: <b class="${confClass}">${confPct}%</b></span>`
+    + `<span>Spread: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b></span>`;
+
+  let existing = meta.parentElement.querySelector(".hero-meta-sources");
+  if (!existing) { existing = document.createElement("div"); existing.className = "hero-meta-sources"; meta.after(existing); }
+  existing.innerHTML = cur.perModel
+    .filter(m => m.temp != null)
+    .map(m => { const c = getSourceConfig(m.key); return `<span style="color:${c.color}">${c.name}: ${fmtTemp(m.temp)}\u00B0</span>`; })
+    .join("");
+}
+
+function renderTiles(cur) {
+  const tiles = document.getElementById("tiles");
+  const data = [
+    { icon: "\uD83D\uDCA7", label: "Humidity", value: cur.humidity != null ? cur.humidity.toFixed(0) : "\u2014", unit: "%" },
+    { icon: "\uD83D\uDCA8", label: "Wind", value: cur.wind != null ? cur.wind.toFixed(1) : "\u2014", unit: `m/s ${windDir(cur.windDir)}` },
+    { icon: "\uD83D\uDCCA", label: "Pressure", value: cur.pressure != null ? cur.pressure.toFixed(0) : "\u2014", unit: "hPa" },
+    { icon: "\u2601\uFE0F", label: "Clouds", value: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : "\u2014", unit: "%" },
+  ];
+  tiles.innerHTML = data.map(t => `
+    <div class="tile">
+      <div class="tile-label">${t.icon} ${t.label}</div>
+      <div class="tile-value">${t.value}<span class="unit">${t.unit}</span></div>
+    </div>
+  `).join("");
+}
+
+function renderChartLegend(agg) {
+  const legend = document.getElementById("chart-legend");
+  legend.innerHTML = "";
+
+  // Aggregated (not hoverable)
+  const aggItem = document.createElement("span");
+  aggItem.className = "legend-item";
+  aggItem.innerHTML = `<span class="legend-line" style="background:#F8FAFC"></span> Aggregated`;
+  legend.appendChild(aggItem);
+
+  // Per-source (hoverable — highlight on chart)
+  for (const k of agg.modelKeys) {
+    const cfg = getSourceConfig(k);
+    const item = document.createElement("span");
+    item.className = "legend-item hoverable";
+    item.innerHTML = `<span class="legend-dash" style="border-color:${cfg.color}"></span> ${cfg.name}`;
+    item.addEventListener("mouseenter", () => highlightSource(k, true));
+    item.addEventListener("mouseleave", () => highlightSource(k, false));
+    legend.appendChild(item);
+  }
+
+  // Precip
+  const precItem = document.createElement("span");
+  precItem.className = "legend-item";
+  precItem.innerHTML = `<span class="legend-box" style="background:rgba(96,165,250,0.55)"></span> Precip (mm)`;
+  legend.appendChild(precItem);
+}
+
+function highlightSource(key, on) {
+  if (!mainChart) return;
+  const cfg = getSourceConfig(key);
+  const targetLabel = cfg?.name;
+  for (const ds of mainChart.data.datasets) {
+    if (ds.label === "Aggregated" || ds.label === "Precipitation") continue;
+    if (ds.label === targetLabel) {
+      ds.borderColor = on ? cfg.color : cfg.color + "40";
+      ds.borderWidth = on ? 2.5 : 1;
+    } else if (on) {
+      ds.borderWidth = 0.6;
+    } else {
+      ds.borderWidth = 1;
+    }
+  }
+  mainChart.update("none");
+}
+
+function renderDaily(daily) {
+  const grid = document.getElementById("daily-grid");
+  grid.innerHTML = daily.map((d, i) => {
+    const w = getWmo(d.weather_code);
+    const today = i === 0;
+    return `
+      <div class="day-card ${today ? "today" : ""}">
+        <div class="day-name">${today ? "Today" : d.dayName}</div>
+        <div class="day-date">${d.month} ${d.dayNum}</div>
+        <div class="day-emoji">${w.icon}</div>
+        <div class="day-desc">${w.desc}</div>
+        <div class="day-temps">
+          ${fmtTemp(d.tempMax, 0)}\u00B0
+          <span class="lo"> / ${fmtTemp(d.tempMin, 0)}\u00B0</span>
+        </div>
+        <div class="day-extra">
+          <span>\uD83D\uDCA7${d.precipitation > 0 ? ` ${d.precipitation}` : " 0"}<span class="sm">mm</span></span>
+          <span>\uD83D\uDCA8 ${d.maxWind}<span class="sm">m/s</span></span>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderFooter() {
+  const footer = document.getElementById("app-footer");
+  let html = `<div class="footer-title">Data Sources & Method</div>`;
+  const allSrc = [...Object.entries(MODELS).map(([k, m]) => m), MET_NORWAY, WTTR];
+  for (const m of allSrc) {
+    html += `<div class="footer-model">
+      <span class="footer-dot" style="background:${m.color}"></span>
+      <b style="color:${m.color}">${m.name}</b> \u2014 ${m.desc} \u2014 weight ${m.weight}
+    </div>`;
+  }
+  html += `<div class="footer-divider">
+    Aggregation: agreement-aware weighted mean with outlier dampening (temperature),
+    circular mean (wind direction), median (precipitation), majority vote (conditions).
+    Confidence = mean agreement factor across sources.
+  </div>`;
+  html += `<div class="footer-powered">
+    Powered by <a href="https://open-meteo.com" target="_blank" rel="noreferrer">Open-Meteo.com</a>,
+    <a href="https://api.met.no" target="_blank" rel="noreferrer">MET Norway</a>
+    & <a href="https://wttr.in" target="_blank" rel="noreferrer">wttr.in</a>
+    \u00B7 No API keys required
+  </div>`;
+  footer.innerHTML = html;
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+async function refresh() {
+  if (!gLoc) return;
+  const btn = document.getElementById("refresh-btn");
+  btn.classList.add("spinning");
+
+  const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
+    Promise.all(Object.keys(MODELS).map(k => fetchModel(k, gLoc.lat, gLoc.lon))),
+    fetchWttrIn(gLoc.lat, gLoc.lon),
+    fetchMetNorway(gLoc.lat, gLoc.lon),
+  ]);
+
+  gOpenMeteoResults = openMeteoResults;
+  gWttrResult = wttrResult;
+  gMetNorwayResult = metNorwayResult;
+
+  const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult, disabledSources);
+  if (agg) {
+    renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, gLoc);
+    renderHero(agg.current);
+    renderTiles(agg.current);
+    buildChart(agg);
+    renderChartLegend(agg);
+    renderDaily(agg.daily);
+  }
+  btn.classList.remove("spinning");
+}
+
+async function main() {
+  const setStage = (s) => { document.getElementById("loader-stage").textContent = s; };
+
+  // Get location
+  let loc;
+  try {
+    loc = await new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        resolve({ lat: 50.4501, lon: 30.5234 });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        () => resolve({ lat: 50.4501, lon: 30.5234 }),
+        { timeout: 8000 }
+      );
+    });
+  } catch {
+    loc = { lat: 50.4501, lon: 30.5234 };
+  }
+
+  setStage("Querying 5 models + MET Norway + wttr.in\u2026");
+
+  // Fetch all sources in parallel
+  const [openMeteoResults, wttrResult, metNorwayResult] = await Promise.all([
+    Promise.all(Object.keys(MODELS).map(k => fetchModel(k, loc.lat, loc.lon))),
+    fetchWttrIn(loc.lat, loc.lon),
+    fetchMetNorway(loc.lat, loc.lon),
+  ]);
+
+  setStage("Aggregating\u2026");
+
+  // Store globally for reaggregation
+  gOpenMeteoResults = openMeteoResults;
+  gWttrResult = wttrResult;
+  gMetNorwayResult = metNorwayResult;
+  gLoc = loc;
+
+  const agg = aggregateAll(openMeteoResults, wttrResult, metNorwayResult);
+  if (!agg) {
+    document.getElementById("loader").style.display = "none";
+    const err = document.getElementById("error-screen");
+    err.style.display = "flex";
+    err.textContent = "All weather sources failed. Please try again later.";
+    return;
+  }
+
+  // Render
+  document.getElementById("loader").style.display = "none";
+  document.getElementById("app").style.display = "block";
+
+  renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
+  renderHero(agg.current);
+  renderTiles(agg.current);
+  buildChart(agg);
+  renderChartLegend(agg);
+  renderDaily(agg.daily);
+  renderFooter();
+}
+
+main();
+</script>
+</body>
+</html>
