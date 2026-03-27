@@ -540,6 +540,12 @@ function round1(v) { return v != null ? Math.round(v * 10) / 10 : null; }
 function safeNum(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
 
 // ── Data Fetching ────────────────────────────────────────────────────
+function fetchWithTimeout(url, ms = 10000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id));
+}
+
 async function fetchModel(key, lat, lon) {
   const cfg = MODELS[key];
   const params = new URLSearchParams({
@@ -552,7 +558,7 @@ async function fetchModel(key, lat, lon) {
     timezone: "auto",
   });
   try {
-    const res = await fetch(`${cfg.endpoint}?${params}`);
+    const res = await fetchWithTimeout(`${cfg.endpoint}?${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { key, data: await res.json(), ok: true };
   } catch (err) {
@@ -564,7 +570,7 @@ async function fetchModel(key, lat, lon) {
 async function fetchWttrIn(lat, lon) {
   try {
     const url = `https://wttr.in/${lat.toFixed(4)},${lon.toFixed(4)}?format=j1`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return { ok: true, data };
@@ -637,7 +643,7 @@ function normalizeWttrIn(wttrData, refTimes) {
 async function fetchMetNorway(lat, lon) {
   try {
     const url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { ok: true, data: await res.json() };
   } catch (err) {
