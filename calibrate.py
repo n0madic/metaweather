@@ -123,13 +123,11 @@ def fetch_tomorrow_io(lat: float, lon: float, api_key: str) -> float | None:
 
 
 def fetch_owm(lat: float, lon: float, api_key: str) -> float | None:
-    url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={api_key}&units=metric"
+    # Use current weather endpoint (more accurate for calibration than 3h forecast)
+    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units=metric"
     try:
         data = json.loads(urllib.request.urlopen(url, timeout=10).read())
-        lst = data.get("list", [])
-        if lst:
-            return lst[0]["main"]["temp"]
-        return None
+        return data["main"]["temp"]
     except (URLError, json.JSONDecodeError, KeyError, ValueError, OSError):
         return None
 
