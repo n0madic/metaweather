@@ -1668,6 +1668,12 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
   if (totalOk < totalSrc) countSpan.className = "source-count-warn";
   coordsEl.appendChild(countSpan);
   coordsEl.appendChild(document.createTextNode(`/${totalSrc} ${t("sources")}`));
+  if (state.lastFetchTime) {
+    const ts = new Date(state.lastFetchTime);
+    const hh = String(ts.getHours()).padStart(2, "0");
+    const mm = String(ts.getMinutes()).padStart(2, "0");
+    coordsEl.appendChild(document.createTextNode(` \u00B7 ${hh}:${mm}`));
+  }
 
   const badges = document.getElementById("model-badges");
   badges.innerHTML = "";
