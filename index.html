@@ -1295,6 +1295,7 @@ function renderFooter() {
     <a href="https://api.met.no" target="_blank" rel="noreferrer">MET Norway</a>
     & <a href="https://wttr.in" target="_blank" rel="noreferrer">wttr.in</a>
     \u00B7 No API keys required
+    \u00B7 <a href="https://github.com/n0madic/metaweather" target="_blank" rel="noreferrer">GitHub</a>
   </div>`;
   footer.innerHTML = html;
 }
@@ -1386,6 +1387,17 @@ async function main() {
   renderDaily(agg.daily);
   renderFooter();
 }
+
+// Dismiss chart tooltip on touch outside canvas
+document.addEventListener("touchstart", (e) => {
+  if (!mainChart) return;
+  const canvas = document.getElementById("main-chart");
+  if (canvas && !canvas.contains(e.target)) {
+    mainChart.setActiveElements([]);
+    mainChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    mainChart.update("none");
+  }
+});
 
 main();
 </script>
