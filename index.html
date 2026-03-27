@@ -862,7 +862,7 @@ function getSourceConfig(key) {
 }
 
 // ── Temperature Unit ─────────────────────────────────────────────────
-let useFahrenheit = false;
+let useFahrenheit = localStorage.getItem("mw_unit") === "F";
 function toDisplay(c) { return c != null ? (useFahrenheit ? c * 9 / 5 + 32 : c) : null; }
 function fmtTemp(c, decimals = 1) {
   const v = toDisplay(c);
@@ -872,6 +872,7 @@ function unitLabel() { return useFahrenheit ? "F" : "C"; }
 
 function setUnit(u) {
   useFahrenheit = (u === "F");
+  localStorage.setItem("mw_unit", u);
   document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
     el.classList.toggle("active", el.dataset.unit === u);
   });
@@ -891,7 +892,7 @@ let gOpenMeteoResults = null;
 let gWttrResult = null;
 let gMetNorwayResult = null;
 let gLoc = null;
-const disabledSources = new Set();
+const disabledSources = new Set(JSON.parse(localStorage.getItem("mw_disabled") || "[]"));
 
 // ── Chart ────────────────────────────────────────────────────────────
 let mainChart = null;
@@ -1065,6 +1066,7 @@ function toggleSource(key, badge) {
     disabledSources.add(key);
   }
   badge.classList.toggle("disabled", disabledSources.has(key));
+  localStorage.setItem("mw_disabled", JSON.stringify([...disabledSources]));
   reaggregate();
 }
 
@@ -1378,6 +1380,13 @@ async function main() {
   // Render
   document.getElementById("loader").style.display = "none";
   document.getElementById("app").style.display = "block";
+
+  // Apply saved unit preference to toggle UI
+  if (useFahrenheit) {
+    document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
+      el.classList.toggle("active", el.dataset.unit === "F");
+    });
+  }
 
   renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
   renderHero(agg.current);
