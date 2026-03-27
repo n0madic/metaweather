@@ -1945,8 +1945,8 @@ async function refresh() {
     state.openMeteoResults = openMeteoResults;
     state.wttrResult = wttrResult;
     state.metNorwayResult = metNorwayResult;
-    state.tomorrowResult = tomorrowResult;
-    state.owmResult = owmResult;
+    if (tomorrowResult.ok || !state.tomorrowResult?.ok) state.tomorrowResult = tomorrowResult;
+    if (owmResult.ok || !state.owmResult?.ok) state.owmResult = owmResult;
     state.lastFetchTime = Date.now();
 
     const agg = aggregateAll(state);
