@@ -848,6 +848,13 @@ function majorityVote(codes, weights) {
   return best;
 }
 
+// For daily cards: prioritize precipitation codes so rainy days don't show as just "Cloudy"
+function dailyWeatherCode(codes) {
+  const precipCodes = codes.filter((c) => c >= 51);
+  if (precipCodes.length > 0) return majorityVote(precipCodes, precipCodes.map(() => 1));
+  return majorityVote(codes, codes.map(() => 1));
+}
+
 function round1(v) { return v != null ? Math.round(v * 10) / 10 : null; }
 function safeNum(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
 
@@ -1308,7 +1315,7 @@ function aggregateAll(st) {
       tempMin: allTemps.length ? round1(Math.min(...allTemps)) : null,
       precipitation: Math.round(totalP * 10) / 10,
       maxWind: round1(maxW),
-      weather_code: dayCodes.length ? majorityVote(dayCodes, dayCodes.map(() => 1)) : 0,
+      weather_code: dayCodes.length ? dailyWeatherCode(dayCodes) : 0,
     };
   });
 
