@@ -147,10 +147,16 @@
     font-size: 42px; font-weight: 800; color: var(--text-primary);
     line-height: 1; letter-spacing: -2px; font-variant-numeric: tabular-nums;
     display: flex; align-items: center; gap: 4px;
+    position: relative; cursor: default;
   }
   .hero-temp .feels { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
   .hero-meta { margin-top: 6px; font-size: 10px; color: var(--text-faint); display: flex; flex-wrap: wrap; gap: 3px 8px; }
-  .hero-meta-sources { display: flex; flex-wrap: wrap; gap: 3px 8px; font-size: 10px; color: var(--text-faint); margin-top: 2px; }
+  .hero-temp-tooltip { display: none; position: absolute; top: 100%; left: 0; z-index: 50; background: var(--bg-secondary); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 12px; min-width: 170px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .hero-temp .big:hover .hero-temp-tooltip, .hero-temp-tooltip.visible { display: block; }
+  .hero-temp-tooltip { letter-spacing: 0; font-weight: 400; font-size: 12px; }
+  .hero-temp-tooltip .tt-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+  .hero-temp-tooltip .tt-row .tt-name { white-space: nowrap; }
+  .hero-temp-tooltip .tt-row .tt-val { font-weight: 600; white-space: nowrap; }
   .hero-meta .spread-ok { color: var(--accent-green); font-weight: 700; }
   .hero-meta .spread-mid { color: var(--accent-yellow); font-weight: 700; }
   .hero-meta .spread-bad { color: var(--accent-red); font-weight: 700; }
@@ -1768,16 +1774,14 @@ function renderHero(cur) {
   spreadSpan.innerHTML = `${escapeHtml(t("spread"))}: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b>`;
   meta.append(confSpan, spreadSpan);
 
-  let existing = meta.parentElement.querySelector(".hero-meta-sources");
-  if (!existing) { existing = document.createElement("div"); existing.className = "hero-meta-sources"; meta.after(existing); }
-  existing.textContent = "";
-  for (const m of cur.perModel.filter(m => m.temp != null)) {
+  const bigEl = document.querySelector(".hero-temp .big");
+  let tt = bigEl.querySelector(".hero-temp-tooltip");
+  if (!tt) { tt = document.createElement("div"); tt.className = "hero-temp-tooltip"; bigEl.appendChild(tt); }
+  const ul2 = unitLabel();
+  tt.innerHTML = cur.perModel.filter(m => m.temp != null).map(m => {
     const c = getSourceConfig(m.key);
-    const span = document.createElement("span");
-    span.style.color = c.color;
-    span.textContent = `${c.name}: ${fmtTemp(m.temp)}\u00B0`;
-    existing.appendChild(span);
-  }
+    return `<div class="tt-row"><span class="tt-name" style="color:${c.color}">${escapeHtml(c.name)}</span><span class="tt-val">${fmtTemp(m.temp)}\u00B0${ul2}</span></div>`;
+  }).join("");
 }
 
 function renderTiles(cur) {
@@ -2103,6 +2107,19 @@ document.addEventListener("touchstart", (e) => {
     state.mainChart.setActiveElements([]);
     state.mainChart.tooltip.setActiveElements([], { x: 0, y: 0 });
     state.mainChart.update("none");
+  }
+});
+
+// Toggle source tooltip on tap (mobile)
+document.querySelector(".hero-temp .big")?.addEventListener("click", (e) => {
+  const tt = e.currentTarget.querySelector(".hero-temp-tooltip");
+  if (tt) tt.classList.toggle("visible");
+});
+document.addEventListener("click", (e) => {
+  const big = document.querySelector(".hero-temp .big");
+  if (big && !big.contains(e.target)) {
+    const tt = big.querySelector(".hero-temp-tooltip");
+    if (tt) tt.classList.remove("visible");
   }
 });
 
