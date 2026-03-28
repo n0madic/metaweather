@@ -657,7 +657,7 @@ const OWM = {
 // Yr.no symbol_code -> WMO weather code
 const YR_TO_WMO = {
   clearsky: 0, fair: 1, partlycloudy: 2, cloudy: 3, fog: 45,
-  lightrainshowers: 80, rainshowers: 80, heavyrainshowers: 82,
+  lightrainshowers: 80, rainshowers: 81, heavyrainshowers: 82,
   lightrain: 61, rain: 63, heavyrain: 65,
   lightrainandthunder: 95, rainandthunder: 95, heavyrainandthunder: 99,
   lightsleet: 66, sleet: 66, heavysleet: 67,
@@ -668,7 +668,7 @@ const YR_TO_WMO = {
   lightsnowandthunder: 95, snowandthunder: 95, heavysnowandthunder: 99,
   lightsleetandthunder: 95, sleetandthunder: 95, heavysleetandthunder: 99,
   lightssnowshowersandthunder: 96, snowshowersandthunder: 96, heavysnowshowersandthunder: 99,
-  lightsleetshowersandthunder: 96, sleetshowersandthunder: 96, heavysleetshowersandthunder: 99,
+  lightssleetshowersandthunder: 96, sleetshowersandthunder: 96, heavysleetshowersandthunder: 99,
 };
 function yrSymbolToWmo(code) {
   return YR_TO_WMO[code.replace(/_(day|night|polartwilight)$/, "")] ?? null;
@@ -726,12 +726,12 @@ const WWO_TO_WMO = {
   248: 45, 260: 48, 263: 51, 266: 53,
   281: 56, 284: 57, 293: 61, 296: 61,
   299: 63, 302: 63, 305: 65, 308: 65,
-  311: 66, 314: 67, 317: 66, 320: 71,
+  311: 66, 314: 67, 317: 66, 320: 67,
   323: 71, 326: 71, 329: 73, 332: 73,
-  335: 75, 338: 75, 350: 96, 353: 80,
+  335: 75, 338: 75, 350: 77, 353: 80,
   356: 81, 359: 82, 362: 85, 365: 86,
-  368: 85, 371: 86, 374: 96, 377: 96,
-  386: 95, 389: 99, 392: 95, 395: 86,
+  368: 85, 371: 86, 374: 77, 377: 77,
+  386: 95, 389: 99, 392: 95, 395: 99,
 };
 
 // Tomorrow.io weather code -> WMO weather code
@@ -740,7 +740,7 @@ const TOMORROW_TO_WMO = {
   2000: 45, 2100: 45,
   4000: 51, 4001: 63, 4200: 61, 4201: 65,
   5000: 73, 5001: 71, 5100: 71, 5101: 75,
-  6000: 56, 6001: 66, 6200: 56, 6201: 67,
+  6000: 56, 6001: 66, 6200: 66, 6201: 67,
   7000: 77, 7101: 77, 7102: 77,
   8000: 95,
 };
@@ -748,10 +748,10 @@ const TOMORROW_TO_WMO = {
 // OpenWeatherMap condition ID -> WMO weather code
 const OWM_TO_WMO = {
   200: 95, 201: 95, 202: 99, 210: 95, 211: 95, 212: 99, 221: 99, 230: 95, 231: 95, 232: 95,
-  300: 51, 301: 51, 302: 53, 310: 53, 311: 53, 312: 55, 313: 55, 314: 55, 321: 55,
+  300: 51, 301: 53, 302: 55, 310: 53, 311: 53, 312: 55, 313: 55, 314: 55, 321: 55,
   500: 61, 501: 63, 502: 65, 503: 65, 504: 65, 511: 66, 520: 80, 521: 81, 522: 82, 531: 82,
   600: 71, 601: 73, 602: 75, 611: 77, 612: 85, 613: 85, 615: 71, 616: 73, 620: 85, 621: 85, 622: 86,
-  701: 45, 711: 45, 721: 45, 731: 45, 741: 45, 751: 45, 761: 45, 762: 45, 771: 45, 781: 45,
+  701: 45, 711: 45, 721: 45, 731: 45, 741: 45, 751: 45, 761: 45, 762: 45, 771: 3, 781: 95,
   800: 0, 801: 1, 802: 2, 803: 3, 804: 3,
 };
 
