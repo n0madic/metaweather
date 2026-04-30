@@ -2123,9 +2123,14 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// Auto-refresh when returning to app after 1+ hour
+// Auto-refresh when returning to a stale page (chart and day cards stay in sync)
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.lastFetchTime && Date.now() - state.lastFetchTime > STALE_MS) {
+    refresh();
+  }
+});
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted && state.lastFetchTime && Date.now() - state.lastFetchTime > STALE_MS) {
     refresh();
   }
 });
