@@ -1,5 +1,5 @@
 // IMPORTANT: bump version on every deployment
-const CACHE = "metaweather-v3";
+const CACHE = "metaweather-v4";
 const STATIC = ["./", "index.html", "manifest.json", "icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -20,18 +20,10 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // API requests: network with offline fallback
-  if (url.hostname !== location.hostname) {
-    e.respondWith(
-      fetch(e.request).catch(() =>
-        new Response(JSON.stringify({ error: "offline" }), {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        })
-      )
-    );
-    return;
-  }
+  // Cross-origin API requests: let the browser handle them directly so the
+  // page's AbortController timeouts and native networking apply (some Android
+  // WebViews don't propagate aborts cleanly through service worker fetch).
+  if (url.hostname !== location.hostname) return;
 
   // HTML: network first, fall back to cache (always get latest version)
   if (e.request.mode === "navigate" || url.pathname.endsWith(".html") || url.pathname.endsWith("/")) {

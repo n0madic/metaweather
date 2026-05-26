@@ -1980,31 +1980,68 @@ document.addEventListener("keydown", (e) => {
 
 // ── Main ─────────────────────────────────────────────────────────────
 let isRefreshing = false;
+
+// Coalesce repeated render requests inside a single animation frame so that
+// several sources arriving back-to-back don't trigger a render storm.
+let rerenderScheduled = false;
+function scheduleRender(onFirstSuccess) {
+  if (rerenderScheduled) return;
+  rerenderScheduled = true;
+  requestAnimationFrame(() => {
+    rerenderScheduled = false;
+    const agg = aggregateAll(state);
+    if (!agg) return;
+    if (onFirstSuccess) onFirstSuccess();
+    renderAll(agg, state.openMeteoResults || [], state.wttrResult, state.metNorwayResult, state.loc);
+  });
+}
+
+// Kick off every source in parallel and render progressively as each one
+// resolves — so a single slow provider (wttr.in, met.no, …) never blocks the
+// rest of the UI. Returns a promise that resolves once every source has either
+// returned or timed out.
+function fetchAllProgressive(loc, { onFirstSuccess, onPartialUpdate } = {}) {
+  // Reset Open-Meteo results so per-source updates can patch them in place.
+  const modelKeys = Object.keys(MODELS);
+  const openMeteoResults = modelKeys.map((key) => ({ key, data: null, ok: false, pending: true }));
+  state.openMeteoResults = openMeteoResults;
+
+  const update = () => {
+    if (onPartialUpdate) onPartialUpdate();
+    scheduleRender(onFirstSuccess);
+  };
+
+  const tasks = [];
+  for (let i = 0; i < modelKeys.length; i++) {
+    const key = modelKeys[i];
+    tasks.push(fetchModel(key, loc.lat, loc.lon).then((r) => {
+      openMeteoResults[i] = r;
+      update();
+    }));
+  }
+  tasks.push(fetchWttrIn(loc.lat, loc.lon).then((r) => { state.wttrResult = r; update(); }));
+  tasks.push(fetchMetNorway(loc.lat, loc.lon).then((r) => { state.metNorwayResult = r; update(); }));
+  tasks.push(fetchTomorrowIo(loc.lat, loc.lon).then((r) => {
+    if (r.ok || !state.tomorrowResult?.ok) state.tomorrowResult = r;
+    update();
+  }));
+  tasks.push(fetchOWM(loc.lat, loc.lon).then((r) => {
+    if (r.ok || !state.owmResult?.ok) state.owmResult = r;
+    update();
+  }));
+
+  return Promise.all(tasks);
+}
+
 async function refresh() {
   if (!state.loc || isRefreshing) return;
   isRefreshing = true;
   const btn = document.getElementById("refresh-btn");
   btn.classList.add("spinning");
   try {
-    const [openMeteoResults, wttrResult, metNorwayResult, tomorrowResult, owmResult] = await Promise.all([
-      Promise.all(Object.keys(MODELS).map(k => fetchModel(k, state.loc.lat, state.loc.lon))),
-      fetchWttrIn(state.loc.lat, state.loc.lon),
-      fetchMetNorway(state.loc.lat, state.loc.lon),
-      fetchTomorrowIo(state.loc.lat, state.loc.lon),
-      fetchOWM(state.loc.lat, state.loc.lon),
-    ]);
-
-    state.openMeteoResults = openMeteoResults;
-    state.wttrResult = wttrResult;
-    state.metNorwayResult = metNorwayResult;
-    if (tomorrowResult.ok || !state.tomorrowResult?.ok) state.tomorrowResult = tomorrowResult;
-    if (owmResult.ok || !state.owmResult?.ok) state.owmResult = owmResult;
+    await fetchAllProgressive(state.loc);
     state.lastFetchTime = Date.now();
-
-    const agg = aggregateAll(state);
-    if (agg) {
-      renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, state.loc);
-    }
+    scheduleRender();
   } finally {
     btn.classList.remove("spinning");
     isRefreshing = false;
@@ -2046,39 +2083,10 @@ async function main() {
   }
 
   loaderTitle.textContent = t("gathering");
-
-  // Fetch all sources in parallel
-  const [openMeteoResults, wttrResult, metNorwayResult, tomorrowResult, owmResult] = await Promise.all([
-    Promise.all(Object.keys(MODELS).map(k => fetchModel(k, loc.lat, loc.lon))),
-    fetchWttrIn(loc.lat, loc.lon),
-    fetchMetNorway(loc.lat, loc.lon),
-    fetchTomorrowIo(loc.lat, loc.lon),
-    fetchOWM(loc.lat, loc.lon),
-  ]);
-
-  // Store globally for reaggregation
-  state.openMeteoResults = openMeteoResults;
-  state.wttrResult = wttrResult;
-  state.metNorwayResult = metNorwayResult;
-  state.tomorrowResult = tomorrowResult;
-  state.owmResult = owmResult;
   state.loc = loc;
-  state.lastFetchTime = Date.now();
 
-  const agg = aggregateAll(state);
-  if (!agg) {
-    document.getElementById("loader").style.display = "none";
-    const err = document.getElementById("error-screen");
-    err.style.display = "flex";
-    err.textContent = t("sources_failed");
-    return;
-  }
-
-  // Render
-  document.getElementById("loader").style.display = "none";
-  document.getElementById("app").style.display = "block";
-
-  // Apply saved preferences to UI
+  // Apply saved preferences to UI before the first render so that nothing
+  // flashes the wrong unit/day toggle when the loader disappears.
   if (useFahrenheit) {
     document.querySelectorAll("#unit-toggle span[data-unit]").forEach(el => {
       const isActive = el.dataset.unit === "F";
@@ -2096,7 +2104,29 @@ async function main() {
     document.getElementById("chart-toggle").classList.remove("active");
   }
 
-  renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
+  let loaderHidden = false;
+  const hideLoader = () => {
+    if (loaderHidden) return;
+    loaderHidden = true;
+    document.getElementById("loader").style.display = "none";
+    document.getElementById("app").style.display = "block";
+  };
+
+  await fetchAllProgressive(loc, { onFirstSuccess: hideLoader });
+  state.lastFetchTime = Date.now();
+
+  // Final pass: either render with full data, or show the error screen if
+  // nothing came back at all.
+  const agg = aggregateAll(state);
+  if (!agg) {
+    document.getElementById("loader").style.display = "none";
+    const err = document.getElementById("error-screen");
+    err.style.display = "flex";
+    err.textContent = t("sources_failed");
+    return;
+  }
+  hideLoader();
+  scheduleRender();
 }
 
 // Dismiss chart tooltip on touch outside canvas
