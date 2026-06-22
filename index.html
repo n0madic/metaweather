@@ -487,6 +487,7 @@
 const STALE_MS = 60 * 60 * 1000;       // 1 hour — data staleness threshold
 const LOC_CACHE_TTL = 30 * 60 * 1000;  // 30 min — geolocation cache TTL
 const PRECIP_NOISE_FLOOR = 0.1;        // mm — precipitation noise threshold
+const PRECIP_AXIS_TIERS = [2, 5, 10, 20, 50, 100]; // mm/h — rain-intensity reference ladder for the precip axis (~10 = heavy rain)
 const DAY_START_HOUR = 7;              // start of "daytime" period
 const DAY_END_HOUR = 20;               // end of "daytime" period
 
@@ -1400,6 +1401,17 @@ function chartData(agg) {
   return agg.chart.slice(0, maxHours);
 }
 
+// Cap the precipitation axis at an absolute rain-intensity reference (mm/h) instead
+// of the raw data max, so a light shower reads as light rather than filling the chart.
+// The ceiling snaps up to the smallest reference tier that still clears the peak, so
+// the scale grows with the actual magnitude of precipitation.
+function precipAxisMax(values) {
+  let peak = 0;
+  for (const v of values) if (v != null && v > peak) peak = v;
+  for (const tier of PRECIP_AXIS_TIERS) if (peak <= tier) return tier;
+  return Math.ceil(peak / 50) * 50;
+}
+
 const nowLinePlugin = {
   id: "nowLine",
   afterDraw(chart) {
@@ -1584,6 +1596,7 @@ function buildChart(agg) {
         y1: {
           position: "right",
           beginAtZero: true,
+          max: precipAxisMax(data.map(d => d.precipitation)),
           grid: { display: false },
           ticks: {
             color: "rgba(59,130,246,0.6)",
@@ -1649,6 +1662,7 @@ function updateChartData(agg) {
       ds.hidden = !state.showModels || state.disabledSources.has(ds._sourceKey);
     }
   }
+  state.mainChart.options.scales.y1.max = precipAxisMax(data.map(d => d.precipitation));
   state.mainChart.update("reaggregate");
 }
 
