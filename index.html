@@ -487,9 +487,14 @@
 const STALE_MS = 60 * 60 * 1000;       // 1 hour — data staleness threshold
 const LOC_CACHE_TTL = 30 * 60 * 1000;  // 30 min — geolocation cache TTL
 const PRECIP_NOISE_FLOOR = 0.1;        // mm — precipitation noise threshold
-const PRECIP_AXIS_TIERS = [2, 5, 10, 20, 50, 100]; // mm/h — rain-intensity reference ladder for the precip axis (~10 = heavy rain)
+const PRECIP_AXIS_TIERS = [2, 5, 10, 20, 50, 100]; // mm per bar — rain-intensity reference ladder for the precip axis
 const DAY_START_HOUR = 7;              // start of "daytime" period
 const DAY_END_HOUR = 20;               // end of "daytime" period
+// Aggregation tuning (calibrate.py parses these — keep the `const NAME = value` form)
+const MAD_FLOOR = 0.1;                 // °C — lower bound for MAD so tight agreement doesn't zero the dampening window
+const AGREEMENT_SIGMA = 2;             // Gaussian sigma for outlier dampening, in MADs
+const WMO_PRECIP_MIN = 51;             // first WMO code that indicates precipitation
+const KMH_TO_MS = 1 / 3.6;             // km/h -> m/s
 
 // ── Localization ─────────────────────────────────────────────────────
 const I18N = {
@@ -687,11 +692,8 @@ const HOURLY_PARAMS = [
   "precipitation", "cloud_cover", "weather_code",
 ].join(",");
 
-const CURRENT_PARAMS = [
-  "temperature_2m", "relative_humidity_2m", "apparent_temperature",
-  "pressure_msl", "wind_speed_10m", "wind_direction_10m",
-  "cloud_cover", "weather_code",
-].join(",");
+// Same as hourly minus precipitation (the current block has no accumulation)
+const CURRENT_PARAMS = HOURLY_PARAMS.split(",").filter((p) => p !== "precipitation").join(",");
 
 // ── WMO Weather Code Mapping ─────────────────────────────────────────
 const WMO = {
@@ -811,11 +813,11 @@ function smartMean(values, weights) {
   for (const p of pairs) { cum += p.w; if (cum >= totalW / 2) { med = p.val; break; } }
 
   // MAD (median absolute deviation)
-  const devs = v.map(x => Math.abs(x - med)).sort((a, b) => a - b);
-  const mad = Math.max(devs[Math.floor(devs.length / 2)], 0.1);
+  const devs = v.map(x => Math.abs(x - med));
+  const mad = Math.max(arrMedian(devs), MAD_FLOOR);
 
-  // Gaussian agreement weights (sigma=2 MADs)
-  const agreeW = v.map(x => Math.exp(-0.5 * ((Math.abs(x - med) / mad) / 2) ** 2));
+  // Gaussian agreement weights
+  const agreeW = v.map(x => Math.exp(-0.5 * ((Math.abs(x - med) / mad) / AGREEMENT_SIGMA) ** 2));
   const finalW = w.map((wi, i) => wi * agreeW[i]);
   const sw = finalW.reduce((s, x) => s + x, 0);
   const result = finalW.reduce((s, x, i) => s + v[i] * x, 0) / sw;
@@ -830,17 +832,22 @@ function arrMedian(arr) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-function circularMean(angles) {
-  if (!angles.length) return 0;
-  let sinSum = 0, cosSum = 0;
-  for (const a of angles) {
-    sinSum += Math.sin((a * Math.PI) / 180);
-    cosSum += Math.cos((a * Math.PI) / 180);
+function circularMean(angles, weights) {
+  if (!angles.length) return null;
+  let sinSum = 0, cosSum = 0, wSum = 0;
+  for (let i = 0; i < angles.length; i++) {
+    const w = weights ? weights[i] : 1;
+    sinSum += w * Math.sin((angles[i] * Math.PI) / 180);
+    cosSum += w * Math.cos((angles[i] * Math.PI) / 180);
+    wSum += w;
   }
+  // Near-cancelling vectors (e.g. 90° vs 270°) have no meaningful mean direction
+  if (wSum <= 0 || Math.hypot(sinSum, cosSum) / wSum < 1e-6) return null;
   return ((Math.atan2(sinSum, cosSum) * 180) / Math.PI + 360) % 360;
 }
 
 function windDir(deg) {
+  if (deg == null) return "";
   const d = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
   return d[Math.round(deg / 22.5) % 16];
 }
@@ -850,20 +857,69 @@ function majorityVote(codes, weights) {
   for (let i = 0; i < codes.length; i++) {
     if (codes[i] != null) m[codes[i]] = (m[codes[i]] || 0) + weights[i];
   }
+  // Ties resolve to the higher (more severe) code so equal-weight disagreement
+  // never hides precipitation behind a milder condition.
   let best = 0, bw = -1;
-  for (const [c, w] of Object.entries(m)) { if (w > bw) { best = +c; bw = w; } }
+  for (const [c, w] of Object.entries(m)) { if (w > bw || (w === bw && +c > best)) { best = +c; bw = w; } }
   return best;
 }
 
-// For daily cards: prioritize precipitation codes so rainy days don't show as just "Cloudy"
-function dailyWeatherCode(codes) {
-  const precipCodes = codes.filter((c) => c >= 51);
-  if (precipCodes.length > 0) return majorityVote(precipCodes, precipCodes.map(() => 1));
-  return majorityVote(codes, codes.map(() => 1));
+// For daily cards: prioritize precipitation codes so rainy days don't show as just "Cloudy".
+// Daytime (07-20) codes lead; if the day's precip total is significant but fell outside
+// that window (overnight rain), vote among the full day's precip codes instead so the
+// icon never contradicts the mm number next to it.
+function dailyWeatherCode(dayCodes, allCodes, totalPrecip) {
+  const dayPrecip = dayCodes.filter((c) => c >= WMO_PRECIP_MIN);
+  if (dayPrecip.length > 0) return majorityVote(dayPrecip, dayPrecip.map(() => 1));
+  if (totalPrecip >= PRECIP_NOISE_FLOOR) {
+    const allPrecip = allCodes.filter((c) => c >= WMO_PRECIP_MIN);
+    if (allPrecip.length > 0) return majorityVote(allPrecip, allPrecip.map(() => 1));
+  }
+  return majorityVote(dayCodes, dayCodes.map(() => 1));
 }
 
 function round1(v) { return v != null ? Math.round(v * 10) / 10 : null; }
 function safeNum(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
+
+// UTC ms -> "YYYY-MM-DDTHH:MM" wall-clock key in the given IANA timezone.
+// DST-safe (unlike adding a constant utc_offset_seconds, which drifts one hour
+// past a transition inside the forecast window).
+const _tzFmtCache = {};
+function wallClockKey(utcMs, tz) {
+  let fmt = _tzFmtCache[tz];
+  if (!fmt) {
+    try {
+      fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      });
+    } catch {
+      fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      });
+    }
+    _tzFmtCache[tz] = fmt;
+  }
+  const p = {};
+  for (const part of fmt.formatToParts(utcMs)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+// Shared hourly schema every independent-source adapter must fill
+const INDEP_HOURLY_FIELDS = [
+  "temperature_2m", "relative_humidity_2m", "pressure_msl", "wind_speed_10m",
+  "wind_direction_10m", "precipitation", "cloud_cover", "weather_code",
+];
+function alignToRefTimes(hourlyMap, refTimes) {
+  const result = { time: refTimes };
+  for (const f of INDEP_HOURLY_FIELDS) result[f] = [];
+  for (const t of refTimes) {
+    const e = hourlyMap[t];
+    for (const f of INDEP_HOURLY_FIELDS) result[f].push(e ? e[f] ?? null : null);
+  }
+  return result;
+}
 
 // ── Data Fetching ────────────────────────────────────────────────────
 function fetchWithTimeout(url, ms = 10000) {
@@ -872,6 +928,22 @@ function fetchWithTimeout(url, ms = 10000) {
   return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id));
 }
 
+// Shared fetch envelope: timeout, auth/rate-limit status mapping, {ok,data|error}
+async function fetchProviderJson(url) {
+  try {
+    const res = await fetchWithTimeout(url);
+    if (res.status === 401 || res.status === 403) throw new Error("Invalid API key");
+    if (res.status === 429) throw new Error("Rate limit exceeded");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { ok: true, data: await res.json() };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// NOTE: the batched Open-Meteo `models=` API would merge these 5 calls into one,
+// but it returns a single un-suffixed `current` block, which would break the
+// per-model current-conditions breakdown — so each model keeps its own endpoint.
 async function fetchModel(key, lat, lon) {
   const cfg = MODELS[key];
   const params = new URLSearchParams({
@@ -883,30 +955,18 @@ async function fetchModel(key, lat, lon) {
     forecast_days: "5",
     timezone: "auto",
   });
-  try {
-    const res = await fetchWithTimeout(`${cfg.endpoint}?${params}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { key, data: await res.json(), ok: true };
-  } catch (err) {
-    return { key, data: null, ok: false, error: err.message };
-  }
+  const r = await fetchProviderJson(`${cfg.endpoint}?${params}`);
+  return { key, data: r.data ?? null, ok: r.ok, error: r.error };
 }
 
 // ── wttr.in Fetching & Normalization ─────────────────────────────────
-async function fetchWttrIn(lat, lon) {
-  try {
-    const url = `https://wttr.in/${lat.toFixed(4)},${lon.toFixed(4)}?format=j1`;
-    const res = await fetchWithTimeout(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return { ok: true, data };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+function fetchWttrIn(lat, lon) {
+  const params = new URLSearchParams({ format: "j1" });
+  return fetchProviderJson(`https://wttr.in/${lat.toFixed(4)},${lon.toFixed(4)}?${params}`);
 }
 
 function normalizeWttrIn(wttrData, refTimes) {
-  // Build a time-indexed map of wttr.in hourly data
+  // Build a time-indexed map of wttr.in hourly data (times are already location-local)
   const hourlyMap = {};
   for (const day of wttrData.weather || []) {
     const dateStr = day.date; // "2026-03-27"
@@ -916,36 +976,13 @@ function normalizeWttrIn(wttrData, refTimes) {
       hourlyMap[timeKey] = {
         temperature_2m: safeNum(h.tempC),
         relative_humidity_2m: safeNum(h.humidity),
-        apparent_temperature: safeNum(h.FeelsLikeC),
         pressure_msl: safeNum(h.pressure),
-        wind_speed_10m: safeNum(h.windspeedKmph) != null ? safeNum(h.windspeedKmph) / 3.6 : null, // km/h -> m/s
+        wind_speed_10m: safeNum(h.windspeedKmph) != null ? safeNum(h.windspeedKmph) * KMH_TO_MS : null,
         wind_direction_10m: safeNum(h.winddirDegree),
         precipitation: safeNum(h.precipMM),
         cloud_cover: safeNum(h.cloudcover),
         weather_code: WWO_TO_WMO[parseInt(h.weatherCode)] ?? null,
       };
-    }
-  }
-
-  // Build arrays aligned to refTimes
-  const result = {
-    time: refTimes,
-    temperature_2m: [],
-    relative_humidity_2m: [],
-    apparent_temperature: [],
-    pressure_msl: [],
-    wind_speed_10m: [],
-    wind_direction_10m: [],
-    precipitation: [],
-    cloud_cover: [],
-    weather_code: [],
-  };
-
-  for (const t of refTimes) {
-    const entry = hourlyMap[t];
-    for (const param of Object.keys(result)) {
-      if (param === "time") continue;
-      result[param].push(entry ? entry[param] : null);
     }
   }
 
@@ -956,37 +993,28 @@ function normalizeWttrIn(wttrData, refTimes) {
     relative_humidity_2m: safeNum(cc.humidity),
     apparent_temperature: safeNum(cc.FeelsLikeC),
     pressure_msl: safeNum(cc.pressure),
-    wind_speed_10m: safeNum(cc.windspeedKmph) != null ? safeNum(cc.windspeedKmph) / 3.6 : null,
+    wind_speed_10m: safeNum(cc.windspeedKmph) != null ? safeNum(cc.windspeedKmph) * KMH_TO_MS : null,
     wind_direction_10m: safeNum(cc.winddirDegree),
     cloud_cover: safeNum(cc.cloudcover),
     weather_code: WWO_TO_WMO[parseInt(cc.weatherCode)] ?? null,
   } : null;
 
-  return { hourly: result, current };
+  return { hourly: alignToRefTimes(hourlyMap, refTimes), current };
 }
 
 // ── MET Norway Fetching & Normalization ──────────────────────────────
-async function fetchMetNorway(lat, lon) {
-  try {
-    const url = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
-    const res = await fetchWithTimeout(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { ok: true, data: await res.json() };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+function fetchMetNorway(lat, lon) {
+  const params = new URLSearchParams({ lat: lat.toFixed(4), lon: lon.toFixed(4) });
+  return fetchProviderJson(`https://api.met.no/weatherapi/locationforecast/2.0/compact?${params}`);
 }
 
-function normalizeMetNorway(metData, refTimes, utcOffsetSec) {
+function normalizeMetNorway(metData, refTimes, tz) {
   const ts = metData.properties?.timeseries;
   if (!ts?.length) return null;
 
-  // Build time-indexed map (UTC -> local time)
   const hourlyMap = {};
   for (const entry of ts) {
-    const utcMs = new Date(entry.time).getTime();
-    const loc = new Date(utcMs + utcOffsetSec * 1000);
-    const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
+    const key = wallClockKey(new Date(entry.time).getTime(), tz);
     const d = entry.data?.instant?.details;
     if (!d) continue;
     const sym = entry.data?.next_1_hours?.summary?.symbol_code
@@ -997,16 +1025,12 @@ function normalizeMetNorway(metData, refTimes, utcOffsetSec) {
       pressure_msl: d.air_pressure_at_sea_level ?? null,
       wind_speed_10m: d.wind_speed ?? null,
       wind_direction_10m: d.wind_from_direction ?? null,
+      // next_6_hours totals are deliberately NOT spread into single hours —
+      // beyond the 1-hourly horizon met.no abstains from the precip vote
       precipitation: entry.data?.next_1_hours?.details?.precipitation_amount ?? null,
       cloud_cover: d.cloud_area_fraction ?? null,
       weather_code: sym ? yrSymbolToWmo(sym) : null,
     };
-  }
-
-  const result = { time: refTimes, temperature_2m: [], relative_humidity_2m: [], pressure_msl: [], wind_speed_10m: [], wind_direction_10m: [], precipitation: [], cloud_cover: [], weather_code: [] };
-  for (const t of refTimes) {
-    const e = hourlyMap[t];
-    for (const p of Object.keys(result)) { if (p !== "time") result[p].push(e ? e[p] : null); }
   }
 
   const f = ts[0]?.data?.instant?.details;
@@ -1017,34 +1041,27 @@ function normalizeMetNorway(metData, refTimes, utcOffsetSec) {
     wind_direction_10m: f.wind_from_direction ?? null, cloud_cover: f.cloud_area_fraction ?? null,
     weather_code: fSym ? yrSymbolToWmo(fSym) : null,
   } : null;
-  return { hourly: result, current };
+  return { hourly: alignToRefTimes(hourlyMap, refTimes), current };
 }
 
 // ── Tomorrow.io Fetch & Normalize ────────────────────────────────────
-async function fetchTomorrowIo(lat, lon) {
+function fetchTomorrowIo(lat, lon) {
   const key = getApiKey("tomorrow");
-  if (!key) return { ok: false, error: "no_key", noKey: true };
-  try {
-    const url = `https://api.tomorrow.io/v4/weather/forecast?location=${lat.toFixed(4)},${lon.toFixed(4)}&apikey=${encodeURIComponent(key)}&timesteps=1h&units=metric`;
-    const res = await fetchWithTimeout(url);
-    if (res.status === 401 || res.status === 403) throw new Error("Invalid API key");
-    if (res.status === 429) throw new Error("Rate limit exceeded");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { ok: true, data: await res.json() };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  if (!key) return Promise.resolve({ ok: false, error: "no_key", noKey: true });
+  const params = new URLSearchParams({
+    location: `${lat.toFixed(4)},${lon.toFixed(4)}`,
+    apikey: key, timesteps: "1h", units: "metric",
+  });
+  return fetchProviderJson(`https://api.tomorrow.io/v4/weather/forecast?${params}`);
 }
 
-function normalizeTomorrowIo(tomorrowData, refTimes, utcOffsetSec) {
+function normalizeTomorrowIo(tomorrowData, refTimes, tz) {
   const hourly = tomorrowData?.timelines?.hourly;
   if (!hourly?.length) return null;
 
   const hourlyMap = {};
   for (const entry of hourly) {
-    const utcMs = new Date(entry.time).getTime();
-    const loc = new Date(utcMs + utcOffsetSec * 1000);
-    const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
+    const key = wallClockKey(new Date(entry.time).getTime(), tz);
     const v = entry.values || {};
     hourlyMap[key] = {
       temperature_2m: v.temperature ?? null,
@@ -1052,45 +1069,35 @@ function normalizeTomorrowIo(tomorrowData, refTimes, utcOffsetSec) {
       pressure_msl: v.pressureSeaLevel ?? null,
       wind_speed_10m: v.windSpeed ?? null,
       wind_direction_10m: v.windDirection ?? null,
-      precipitation: (v.rainIntensity || 0) + (v.snowIntensity || 0) + (v.sleetIntensity || 0) + (v.freezingRainIntensity || 0) || null,
+      // 0 is a real "dry" vote — never collapse it to null
+      precipitation: (v.rainIntensity || 0) + (v.snowIntensity || 0) + (v.sleetIntensity || 0) + (v.freezingRainIntensity || 0),
       cloud_cover: v.cloudCover ?? null,
       weather_code: TOMORROW_TO_WMO[v.weatherCode] ?? null,
     };
   }
 
-  const result = { time: refTimes, temperature_2m: [], relative_humidity_2m: [], pressure_msl: [], wind_speed_10m: [], wind_direction_10m: [], precipitation: [], cloud_cover: [], weather_code: [] };
-  for (const t of refTimes) {
-    const e = hourlyMap[t];
-    for (const p of Object.keys(result)) { if (p !== "time") result[p].push(e ? e[p] : null); }
-  }
-
   const first = hourly[0]?.values;
   const current = first ? {
     temperature_2m: first.temperature ?? null, relative_humidity_2m: first.humidity ?? null,
+    apparent_temperature: first.temperatureApparent ?? null,
     pressure_msl: first.pressureSeaLevel ?? null, wind_speed_10m: first.windSpeed ?? null,
     wind_direction_10m: first.windDirection ?? null, cloud_cover: first.cloudCover ?? null,
     weather_code: TOMORROW_TO_WMO[first.weatherCode] ?? null,
   } : null;
-  return { hourly: result, current };
+  return { hourly: alignToRefTimes(hourlyMap, refTimes), current };
 }
 
 // ── OpenWeatherMap Fetch & Normalize ─────────────────────────────────
-async function fetchOWM(lat, lon) {
+function fetchOWM(lat, lon) {
   const key = getApiKey("owm");
-  if (!key) return { ok: false, error: "no_key", noKey: true };
-  try {
-    const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&appid=${encodeURIComponent(key)}&units=metric`;
-    const res = await fetchWithTimeout(url);
-    if (res.status === 401 || res.status === 403) throw new Error("Invalid API key");
-    if (res.status === 429) throw new Error("Rate limit exceeded");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { ok: true, data: await res.json() };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
+  if (!key) return Promise.resolve({ ok: false, error: "no_key", noKey: true });
+  const params = new URLSearchParams({
+    lat: lat.toFixed(4), lon: lon.toFixed(4), appid: key, units: "metric",
+  });
+  return fetchProviderJson(`https://api.openweathermap.org/data/2.5/forecast?${params}`);
 }
 
-function normalizeOWM(owmData, refTimes, utcOffsetSec) {
+function normalizeOWM(owmData, refTimes, tz) {
   const list = owmData?.list;
   if (!list?.length) return null;
 
@@ -1098,95 +1105,86 @@ function normalizeOWM(owmData, refTimes, utcOffsetSec) {
   const hourlyMap = {};
   for (const entry of list) {
     const utcMs = entry.dt * 1000;
+    // Rain AND snow both count as precipitation (snow-only hours are not "dry")
+    const precip3h = (entry.rain?.["3h"] ?? 0) + (entry.snow?.["3h"] ?? 0);
     for (let offset = 0; offset < 3; offset++) {
-      const loc = new Date(utcMs + utcOffsetSec * 1000 + offset * 3600000);
-      const key = `${loc.getUTCFullYear()}-${String(loc.getUTCMonth()+1).padStart(2,"0")}-${String(loc.getUTCDate()).padStart(2,"0")}T${String(loc.getUTCHours()).padStart(2,"0")}:${String(loc.getUTCMinutes()).padStart(2,"0")}`;
-      const rain3h = entry.rain?.["3h"] ?? 0;
+      const key = wallClockKey(utcMs + offset * 3600000, tz);
       hourlyMap[key] = {
         temperature_2m: entry.main?.temp ?? null,
         relative_humidity_2m: entry.main?.humidity ?? null,
         pressure_msl: entry.main?.pressure ?? null,
         wind_speed_10m: entry.wind?.speed ?? null,
         wind_direction_10m: entry.wind?.deg ?? null,
-        precipitation: rain3h / 3,
+        precipitation: precip3h / 3,
         cloud_cover: entry.clouds?.all ?? null,
         weather_code: OWM_TO_WMO[entry.weather?.[0]?.id] ?? null,
       };
     }
   }
 
-  const result = { time: refTimes, temperature_2m: [], relative_humidity_2m: [], pressure_msl: [], wind_speed_10m: [], wind_direction_10m: [], precipitation: [], cloud_cover: [], weather_code: [] };
-  for (const t of refTimes) {
-    const e = hourlyMap[t];
-    for (const p of Object.keys(result)) { if (p !== "time") result[p].push(e ? e[p] : null); }
-  }
-
   const first = list[0];
   const current = first ? {
     temperature_2m: first.main?.temp ?? null, relative_humidity_2m: first.main?.humidity ?? null,
+    apparent_temperature: first.main?.feels_like ?? null,
     pressure_msl: first.main?.pressure ?? null, wind_speed_10m: first.wind?.speed ?? null,
     wind_direction_10m: first.wind?.deg ?? null, cloud_cover: first.clouds?.all ?? null,
     weather_code: OWM_TO_WMO[first.weather?.[0]?.id] ?? null,
   } : null;
-  return { hourly: result, current };
+  return { hourly: alignToRefTimes(hourlyMap, refTimes), current };
 }
+
+// ── Independent (non-Open-Meteo) source registry ─────────────────────
+// Single place that defines an independent source; aggregation, chart, badges,
+// footer and fetching all iterate this list, so adding a source is one entry.
+// keyName = localStorage API-key id for key-gated providers.
+const INDEPENDENT_SOURCES = [
+  { key: "met_norway", cfg: MET_NORWAY, fetch: fetchMetNorway, normalize: normalizeMetNorway },
+  { key: "wttr", cfg: WTTR, fetch: fetchWttrIn, normalize: normalizeWttrIn },
+  { key: "tomorrow_io", cfg: TOMORROW_IO, fetch: fetchTomorrowIo, normalize: normalizeTomorrowIo, keyName: "tomorrow" },
+  { key: "owm", cfg: OWM, fetch: fetchOWM, normalize: normalizeOWM, keyName: "owm" },
+];
 
 // ── Aggregation ──────────────────────────────────────────────────────
 function aggregateAll(st) {
-  const { openMeteoResults, wttrResult, metNorwayResult, tomorrowResult, owmResult, disabledSources: disabled } = st;
-  const allOk = openMeteoResults.filter((r) => r.ok && r.data?.hourly);
+  const { openMeteoResults, indepResults, disabledSources: disabled } = st;
+  const allOk = (openMeteoResults || []).filter((r) => r.ok && r.data?.hourly);
   const valid = allOk.filter((r) => !disabled.has(r.key));
-  const anyIndependent = (wttrResult?.ok && !disabled.has("wttr"))
-    || (metNorwayResult?.ok && !disabled.has("met_norway"))
-    || (tomorrowResult?.ok && !disabled.has("tomorrow_io"))
-    || (owmResult?.ok && !disabled.has("owm"));
+  const anyIndependent = INDEPENDENT_SOURCES.some(
+    (s) => indepResults[s.key]?.ok && !disabled.has(s.key)
+  );
   if (!valid.length && !anyIndependent) return null;
 
   const refSource = allOk[0] || valid[0];
-  let times, utcOffset;
+  let times, tz;
   if (refSource) {
     times = refSource.data.hourly.time;
-    utcOffset = refSource.data.utc_offset_seconds || 0;
+    tz = refSource.data.timezone || "UTC";
   } else {
-    // No Open-Meteo source available — generate synthetic hourly timestamps (UTC)
-    utcOffset = 0;
+    // No Open-Meteo source available — synthetic hourly grid in the browser's timezone
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     times = [];
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     for (let h = 0; h < 24 * 5; h++) {
-      const d = new Date(start.getTime() + h * 3600000);
-      times.push(d.toISOString().slice(0, 16));
+      times.push(wallClockKey(start.getTime() + h * 3600000, tz));
     }
   }
 
-  // Normalize independent sources
-  const wttrHasData = wttrResult?.ok && wttrResult.data;
-  const wttrNorm = wttrHasData ? normalizeWttrIn(wttrResult.data, times) : null;
-  const wttr = (wttrHasData && !disabled.has("wttr")) ? wttrNorm : null;
-
-  const metHasData = metNorwayResult?.ok && metNorwayResult.data;
-  const metNorm = metHasData ? normalizeMetNorway(metNorwayResult.data, times, utcOffset) : null;
-  const met = (metHasData && !disabled.has("met_norway")) ? metNorm : null;
-
-  // Tomorrow.io
-  const tomorrowHasData = tomorrowResult?.ok && tomorrowResult.data;
-  const tomorrowNorm = tomorrowHasData ? normalizeTomorrowIo(tomorrowResult.data, times, utcOffset) : null;
-  const tomorrow = (tomorrowHasData && !disabled.has("tomorrow_io")) ? tomorrowNorm : null;
-
-  // OpenWeatherMap
-  const owmHasData = owmResult?.ok && owmResult.data;
-  const owmNorm = owmHasData ? normalizeOWM(owmResult.data, times, utcOffset) : null;
-  const owm = (owmHasData && !disabled.has("owm")) ? owmNorm : null;
+  // Normalize independent sources via the registry
+  const indep = INDEPENDENT_SOURCES.map((src) => {
+    const result = indepResults[src.key];
+    const norm = (result?.ok && result.data) ? src.normalize(result.data, times, tz) : null;
+    const enabled = (norm && !disabled.has(src.key)) ? norm : null;
+    return { key: src.key, cfg: src.cfg, norm, enabled };
+  });
 
   // All keys for chart (including disabled, for line display)
-  const allChartKeys = [...allOk.map(r => r.key)];
-  if (wttrHasData) allChartKeys.push("wttr");
-  if (metHasData) allChartKeys.push("met_norway");
-  if (tomorrowHasData) allChartKeys.push("tomorrow_io");
-  if (owmHasData) allChartKeys.push("owm");
+  const allChartKeys = [
+    ...allOk.map((r) => r.key),
+    ...indep.filter((s) => s.norm).map((s) => s.key),
+  ];
 
   // Helper: collect values + weights for a parameter from all sources at index i
-  const WEIGHTED_PARAMS = ["temperature_2m", "relative_humidity_2m", "pressure_msl", "wind_speed_10m", "wind_direction_10m", "cloud_cover", "weather_code"];
   function collectParam(param, i, sources) {
     const vals = [], ws = [];
     for (const { hourly, weight } of sources) {
@@ -1205,24 +1203,18 @@ function aggregateAll(st) {
   }
 
   // Build unified source list for hourly collection
-  const enabledSources = [];
-  for (const r of valid) enabledSources.push({ hourly: r.data.hourly, weight: MODELS[r.key].weight });
-  if (wttr) enabledSources.push({ hourly: wttr.hourly, weight: WTTR.weight });
-  if (met) enabledSources.push({ hourly: met.hourly, weight: MET_NORWAY.weight });
-  if (tomorrow) enabledSources.push({ hourly: tomorrow.hourly, weight: TOMORROW_IO.weight });
-  if (owm) enabledSources.push({ hourly: owm.hourly, weight: OWM.weight });
+  const enabledSources = [
+    ...valid.map((r) => ({ hourly: r.data.hourly, weight: MODELS[r.key].weight })),
+    ...indep.filter((s) => s.enabled).map((s) => ({ hourly: s.enabled.hourly, weight: s.cfg.weight })),
+  ];
 
   // Hourly aggregation
-  let confidenceSum = 0, confidenceN = 0;
   const hourly = times.map((t, i) => {
     const row = { time: t };
 
     // Chart line data for ALL responding sources
     for (const r of allOk) row[`temp_${r.key}`] = r.data.hourly.temperature_2m?.[i] ?? null;
-    if (wttrNorm) row.temp_wttr = wttrNorm.hourly.temperature_2m[i];
-    if (metNorm) row.temp_met_norway = metNorm.hourly.temperature_2m[i];
-    if (tomorrowNorm) row.temp_tomorrow_io = tomorrowNorm.hourly.temperature_2m[i];
-    if (owmNorm) row.temp_owm = owmNorm.hourly.temperature_2m[i];
+    for (const s of indep) if (s.norm) row[`temp_${s.key}`] = s.norm.hourly.temperature_2m[i];
 
     // Collect all params from enabled sources
     const { vals: temps, ws: tW } = collectParam("temperature_2m", i, enabledSources);
@@ -1237,19 +1229,16 @@ function aggregateAll(st) {
     // Agreement-aware aggregation for temperature
     const tempResult = smartMean(temps, tW);
     row.temp_agg = tempResult.value != null ? round1(tempResult.value) : null;
-    row.confidence = tempResult.confidence;
-    confidenceSum += tempResult.confidence; confidenceN++;
 
-    row.temp_min = temps.length ? Math.min(...temps) : null;
-    row.temp_max = temps.length ? Math.max(...temps) : null;
     row.humidity = weightedMean(humids, hW);
     row.pressure = weightedMean(pressures, pW);
     row.wind = weightedMean(winds, wW);
-    row.windDir = wdirs.length ? circularMean(wdirs) : 0;
-    // Precipitation: median (robust to outliers), filter noise < 0.1mm
-    const sigPrecip = precips.filter(v => v >= PRECIP_NOISE_FLOOR);
-    row.precipitation = sigPrecip.length ? round1(arrMedian(sigPrecip)) : 0;
-    row.precipConsensus = precips.length ? Math.round(sigPrecip.length / precips.length * 100) : 0;
+    row.windDir = circularMean(wdirs, wdW);
+    // Precipitation: median over ALL reporting sources (dry 0mm votes count),
+    // then the noise floor is applied to the RESULT — so a single wet outlier
+    // among mostly-dry sources cannot set the aggregate.
+    const med = precips.length ? arrMedian(precips) : 0;
+    row.precipitation = med >= PRECIP_NOISE_FLOOR ? round1(med) : 0;
     row.cloud_cover = weightedMean(clouds, clW);
     row.weather_code = codes.length ? majorityVote(codes, coW) : 0;
     return row;
@@ -1269,18 +1258,18 @@ function aggregateAll(st) {
     if (src.weather_code != null) { cV.codes.push(src.weather_code); cW.codes.push(weight); }
     if (src.cloud_cover != null) { cV.clouds.push(src.cloud_cover); cW.clouds.push(weight); }
   }
-  for (const r of valid) pushCurrent(r.data.current, MODELS[r.key].weight);
-  if (wttr) pushCurrent(wttr.current, WTTR.weight);
-  if (met) pushCurrent(met.current, MET_NORWAY.weight);
-  if (tomorrow) pushCurrent(tomorrow.current, TOMORROW_IO.weight);
-  if (owm) pushCurrent(owm.current, OWM.weight);
-
   const perModel = [];
-  for (const r of valid) perModel.push({ key: r.key, temp: r.data.current?.temperature_2m ?? null });
-  if (wttr?.current?.temperature_2m != null) perModel.push({ key: "wttr", temp: wttr.current.temperature_2m });
-  if (met?.current?.temperature_2m != null) perModel.push({ key: "met_norway", temp: met.current.temperature_2m });
-  if (tomorrow?.current?.temperature_2m != null) perModel.push({ key: "tomorrow_io", temp: tomorrow.current.temperature_2m });
-  if (owm?.current?.temperature_2m != null) perModel.push({ key: "owm", temp: owm.current.temperature_2m });
+  for (const r of valid) {
+    pushCurrent(r.data.current, MODELS[r.key].weight);
+    perModel.push({ key: r.key, temp: r.data.current?.temperature_2m ?? null });
+  }
+  for (const s of indep) {
+    if (!s.enabled) continue;
+    pushCurrent(s.enabled.current, s.cfg.weight);
+    if (s.enabled.current?.temperature_2m != null) {
+      perModel.push({ key: s.key, temp: s.enabled.current.temperature_2m });
+    }
+  }
 
   const curTempResult = smartMean(cV.temps, cW.temps);
   const current = {
@@ -1289,16 +1278,21 @@ function aggregateAll(st) {
     humidity: weightedMean(cV.humids, cW.humids),
     pressure: weightedMean(cV.press, cW.press),
     wind: weightedMean(cV.winds, cW.winds),
-    windDir: cV.wdirs.length ? circularMean(cV.wdirs) : 0,
+    windDir: circularMean(cV.wdirs, cW.wdirs),
     weather_code: cV.codes.length ? majorityVote(cV.codes, cW.codes) : 0,
     cloud_cover: weightedMean(cV.clouds, cW.clouds),
     spread: cV.temps.length > 1 ? Math.max(...cV.temps) - Math.min(...cV.temps) : 0,
     confidence: curTempResult.confidence,
-    sourceCount: valid.length + (wttr ? 1 : 0) + (met ? 1 : 0) + (tomorrow ? 1 : 0) + (owm ? 1 : 0),
+    sourceCount: valid.length + indep.filter((s) => s.enabled).length,
     perModel,
   };
 
   // Daily summaries
+  const dayIndices = {};
+  times.forEach((t, i) => {
+    const dk = t.slice(0, 10);
+    (dayIndices[dk] ||= []).push(i);
+  });
   const dayMap = {};
   for (const h of hourly) {
     const dk = h.time.slice(0, 10);
@@ -1307,41 +1301,62 @@ function aggregateAll(st) {
   }
 
   const daily = Object.entries(dayMap).map(([date, pts]) => {
-    const allTemps = pts.map((p) => p.temp_agg).filter((v) => v != null);
+    // Daily extremes: consensus of each source's OWN daily max/min. Taking the
+    // max of the hourly dampened means would systematically flatten peaks
+    // (every hour is pulled toward the median before the max is taken).
+    const idxs = dayIndices[date] || [];
+    const maxVals = [], minVals = [], exW = [];
+    for (const s of enabledSources) {
+      let mx = null, mn = null;
+      for (const i of idxs) {
+        const v = s.hourly.temperature_2m?.[i];
+        if (v != null) {
+          if (mx == null || v > mx) mx = v;
+          if (mn == null || v < mn) mn = v;
+        }
+      }
+      if (mx != null) { maxVals.push(mx); minVals.push(mn); exW.push(s.weight); }
+    }
     const dayPts = pts.filter((p) => { const hr = parseInt(p.time.slice(11, 13)); return hr >= DAY_START_HOUR && hr <= DAY_END_HOUR; });
     const dayCodes = dayPts.map((p) => p.weather_code).filter((v) => v != null);
+    const allCodes = pts.map((p) => p.weather_code).filter((v) => v != null);
     const totalP = pts.reduce((s, p) => s + (p.precipitation || 0), 0);
     const maxW = Math.max(0, ...pts.map((p) => p.wind || 0));
-    const dt = new Date(date + "T12:00:00");
     return {
       date,
-      dayName: dt.toLocaleDateString(currentLang, { weekday: "short" }),
-      dayNum: dt.getDate(),
-      month: dt.toLocaleDateString(currentLang, { month: "short" }),
-      tempMax: allTemps.length ? round1(Math.max(...allTemps)) : null,
-      tempMin: allTemps.length ? round1(Math.min(...allTemps)) : null,
+      tempMax: maxVals.length ? round1(smartMean(maxVals, exW).value) : null,
+      tempMin: minVals.length ? round1(smartMean(minVals, exW).value) : null,
       precipitation: Math.round(totalP * 10) / 10,
       maxWind: round1(maxW),
-      weather_code: dayCodes.length ? dailyWeatherCode(dayCodes) : 0,
+      weather_code: dayCodes.length ? dailyWeatherCode(dayCodes, allCodes, totalP) : 0,
     };
   });
 
-  const chart = hourly.filter((_, i) => i % 3 === 0);
-  return { current, hourly, chart, daily, timezone: refSource.data.timezone, modelKeys: allChartKeys };
+  // Chart: every 3rd hour; the precip bar is the ACCUMULATION over its 3-hour
+  // bucket, so rain falling in the two skipped hours stays visible.
+  const chart = [];
+  for (let i = 0; i < hourly.length; i += 3) {
+    const entry = { ...hourly[i] };
+    let bucket = 0;
+    for (let j = i; j < Math.min(i + 3, hourly.length); j++) bucket += hourly[j].precipitation || 0;
+    entry.precipitation = Math.round(bucket * 10) / 10;
+    chart.push(entry);
+  }
+
+  return { current, hourly, chart, daily, timezone: refSource ? refSource.data.timezone : tz, modelKeys: allChartKeys };
 }
 
 // ── All sources config for display ───────────────────────────────────
 function getSourceConfig(key) {
-  if (key === "wttr") return WTTR;
-  if (key === "met_norway") return MET_NORWAY;
-  if (key === "tomorrow_io") return TOMORROW_IO;
-  if (key === "owm") return OWM;
-  return MODELS[key];
+  const s = INDEPENDENT_SOURCES.find((x) => x.key === key);
+  return s ? s.cfg : MODELS[key];
 }
 
 // ── Temperature Unit ─────────────────────────────────────────────────
 let useFahrenheit = localStorage.getItem("mw_unit") === "F";
 function toDisplay(c) { return c != null ? (useFahrenheit ? c * 9 / 5 + 32 : c) : null; }
+// For temperature DIFFERENCES (spread etc.) — scale only, no +32 offset
+function toDisplayDelta(c) { return useFahrenheit ? c * 9 / 5 : c; }
 function fmtTemp(c, decimals = 1) {
   const v = toDisplay(c);
   return v != null ? v.toFixed(decimals) : "\u2014";
@@ -1353,11 +1368,9 @@ function setLang(lang) {
   localStorage.setItem("mw_lang", lang);
   document.documentElement.lang = lang;
   document.getElementById("lang-select").value = lang;
-  // Re-render all text
-  if (!state.openMeteoResults) return;
-  const agg = aggregateAll(state);
-  if (!agg) return;
-  renderAll(agg, state.openMeteoResults, state.wttrResult, state.metNorwayResult, state.loc);
+  // Re-render all text from the cached aggregate (locale only affects rendering)
+  if (!state.lastAgg) return;
+  renderAll(state.lastAgg);
 }
 
 function setUnit(u) {
@@ -1368,14 +1381,12 @@ function setUnit(u) {
     el.classList.toggle("active", isActive);
     el.setAttribute("aria-checked", isActive);
   });
-  // Rebuild chart (axis labels change) and re-render
-  if (!state.openMeteoResults) return;
-  const agg = aggregateAll(state);
+  // Unit is display-only: re-render from the cached aggregate, no recompute
+  const agg = state.lastAgg;
   if (!agg) return;
   renderHero(agg.current);
   renderTiles(agg.current);
-  buildChart(agg);
-  renderChartLegend(agg);
+  updateChartData(agg);
   renderDaily(agg.daily);
 }
 
@@ -1383,12 +1394,11 @@ function setUnit(u) {
 const state = {
   lastFetchTime: 0,
   openMeteoResults: null,
-  wttrResult: null,
-  metNorwayResult: null,
-  tomorrowResult: null,
-  owmResult: null,
+  indepResults: {},          // keyed by INDEPENDENT_SOURCES key
+  lastAgg: null,             // cached result of aggregateAll for display-only re-renders
   loc: null,
   mainChart: null,
+  chartKeySig: "",           // modelKeys signature of the built chart (rebuild only on change)
   showModels: localStorage.getItem("mw_show_models") !== "false",
   chartDays: parseInt(localStorage.getItem("mw_chart_days")) || 5,
   disabledSources: new Set(),
@@ -1417,8 +1427,10 @@ const nowLinePlugin = {
   afterDraw(chart) {
     const labels = chart.data.labels;
     if (!labels?.length) return;
-    const now = new Date();
-    const nowKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}T${String(now.getHours()).padStart(2,"0")}:00`;
+    // Labels are wall-clock strings in the FORECAST LOCATION's timezone, so
+    // "now" must be expressed in that same timezone (not the browser's).
+    const tz = chart.options.plugins?.nowLine?.timeZone || "UTC";
+    const nowKey = wallClockKey(Date.now(), tz);
     // Find the two labels surrounding now for interpolation
     let idx = -1;
     for (let i = 0; i < labels.length - 1; i++) {
@@ -1426,9 +1438,10 @@ const nowLinePlugin = {
     }
     if (idx < 0) return;
     const xScale = chart.scales.x;
+    // All three parsed in the same (browser-local) basis — differences are correct
     const t0 = new Date(labels[idx]).getTime();
     const t1 = new Date(labels[idx + 1]).getTime();
-    const frac = (now.getTime() - t0) / (t1 - t0);
+    const frac = (new Date(nowKey).getTime() - t0) / (t1 - t0);
     const x0 = xScale.getPixelForValue(idx);
     const x1 = xScale.getPixelForValue(idx + 1);
     const x = x0 + frac * (x1 - x0);
@@ -1524,7 +1537,7 @@ function buildChart(agg) {
         intersect: false,
       },
       plugins: {
-        nowLine: true,
+        nowLine: { timeZone: agg.timezone || "UTC" },
         legend: { display: false },
         tooltip: {
           backgroundColor: "rgba(8,15,30,0.96)",
@@ -1617,10 +1630,10 @@ function setChartDays(days) {
     el.classList.toggle("active", isActive);
     el.setAttribute("aria-checked", isActive);
   });
-  if (!state.openMeteoResults) return;
-  const agg = aggregateAll(state);
+  // Day count only changes how much of the cached aggregate is sliced
+  const agg = state.lastAgg;
   if (agg) {
-    buildChart(agg);
+    updateChartData(agg);
     renderDaily(agg.daily);
   }
 }
@@ -1643,15 +1656,30 @@ function toggleSource(key, badge) {
 function reaggregate() {
   const agg = aggregateAll(state);
   if (!agg) return;
+  state.lastAgg = agg;
   renderHero(agg.current);
   renderTiles(agg.current);
   updateChartData(agg);
   renderDaily(agg.daily);
 }
 
+// Rebuild the chart only when the dataset structure (source set) changed;
+// otherwise update the existing chart in place — no destroy/recreate churn
+// on every progressive source arrival.
+function renderChart(agg) {
+  const keySig = agg.modelKeys.join(",");
+  if (!state.mainChart || state.chartKeySig !== keySig) {
+    state.chartKeySig = keySig;
+    buildChart(agg);
+    return;
+  }
+  updateChartData(agg);
+}
+
 function updateChartData(agg) {
   if (!state.mainChart) { buildChart(agg); return; }
   const data = chartData(agg);
+  state.mainChart.data.labels = data.map(d => d.time);
   for (const ds of state.mainChart.data.datasets) {
     if (ds.label === "Aggregated") {
       ds.data = data.map(d => toDisplay(d.temp_agg));
@@ -1663,6 +1691,7 @@ function updateChartData(agg) {
     }
   }
   state.mainChart.options.scales.y1.max = precipAxisMax(data.map(d => d.precipitation));
+  state.mainChart.options.plugins.nowLine = { timeZone: agg.timezone || "UTC" };
   state.mainChart.update("reaggregate");
 }
 
@@ -1688,23 +1717,23 @@ function toggleModels() {
 }
 
 // ── Render Functions ─────────────────────────────────────────────────
-function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
-  const tomorrowHasKey = !!getApiKey("tomorrow");
-  const owmHasKey = !!getApiKey("owm");
-  const omOk = openMeteoResults.filter(r => r.ok).length;
-  const indepOk = (wttrResult?.ok ? 1 : 0) + (metNorwayResult?.ok ? 1 : 0)
-    + (tomorrowHasKey && state.tomorrowResult?.ok ? 1 : 0)
-    + (owmHasKey && state.owmResult?.ok ? 1 : 0);
+function renderHeader(agg) {
+  const omResults = state.openMeteoResults || [];
+  const loc = state.loc;
+  // Key-gated sources only show up once their API key is configured
+  const visibleIndep = INDEPENDENT_SOURCES.filter((s) => !s.keyName || !!getApiKey(s.keyName));
+  const omOk = omResults.filter(r => r.ok).length;
+  const indepOk = visibleIndep.filter((s) => state.indepResults[s.key]?.ok).length;
   const totalOk = omOk + indepOk;
-  const totalSrc = Object.keys(MODELS).length + 2 + (tomorrowHasKey ? 1 : 0) + (owmHasKey ? 1 : 0);
+  const totalSrc = Object.keys(MODELS).length + visibleIndep.length;
 
   // Build error map for tooltips
   const errorMap = {};
-  for (const r of openMeteoResults) { if (!r.ok) errorMap[r.key] = r.error || t("failed"); }
-  if (!wttrResult?.ok) errorMap.wttr = wttrResult?.error || t("failed");
-  if (!metNorwayResult?.ok) errorMap.met_norway = metNorwayResult?.error || t("failed");
-  if (tomorrowHasKey && !state.tomorrowResult?.ok && !state.tomorrowResult?.noKey) errorMap.tomorrow_io = state.tomorrowResult?.error || t("failed");
-  if (owmHasKey && !state.owmResult?.ok && !state.owmResult?.noKey) errorMap.owm = state.owmResult?.error || t("failed");
+  for (const r of omResults) { if (!r.ok) errorMap[r.key] = r.error || t("failed"); }
+  for (const s of visibleIndep) {
+    const res = state.indepResults[s.key];
+    if (!res?.ok && !res?.noKey) errorMap[s.key] = res?.error || t("failed");
+  }
 
   let locName;
   if (agg.timezone) {
@@ -1713,6 +1742,7 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
   } else {
     locName = `${loc.lat.toFixed(2)}\u00B0, ${loc.lon.toFixed(2)}\u00B0`;
   }
+  const wttrResult = state.indepResults.wttr;
   if (wttrResult?.ok && wttrResult.data?.nearest_area?.[0]) {
     const area = wttrResult.data.nearest_area[0];
     const city = area.areaName?.[0]?.value;
@@ -1739,11 +1769,10 @@ function renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
 
   const badges = document.getElementById("model-badges");
   badges.innerHTML = "";
-  const allSources = [...Object.entries(MODELS).map(([k, m]) => ({ key: k, cfg: m, ok: openMeteoResults.find(r => r.key === k)?.ok })),
-    { key: "met_norway", cfg: MET_NORWAY, ok: metNorwayResult?.ok },
-    { key: "wttr", cfg: WTTR, ok: wttrResult?.ok }];
-  if (tomorrowHasKey) allSources.push({ key: "tomorrow_io", cfg: TOMORROW_IO, ok: state.tomorrowResult?.ok });
-  if (owmHasKey) allSources.push({ key: "owm", cfg: OWM, ok: state.owmResult?.ok });
+  const allSources = [
+    ...Object.entries(MODELS).map(([k, m]) => ({ key: k, cfg: m, ok: omResults.find(r => r.key === k)?.ok })),
+    ...visibleIndep.map((s) => ({ key: s.key, cfg: s.cfg, ok: state.indepResults[s.key]?.ok })),
+  ];
   for (const src of allSources) {
     const badge = document.createElement("span");
     const isDisabled = src.ok && state.disabledSources.has(src.key);
@@ -1777,13 +1806,17 @@ function renderHero(cur) {
     cur.feels_like != null ? `${t("feels_like")} ${fmtTemp(cur.feels_like)}\u00B0${ul}` : "";
 
   const meta = document.getElementById("hero-meta");
-  const spreadDisp = useFahrenheit ? cur.spread * 9 / 5 : cur.spread;
+  const spreadDisp = toDisplayDelta(cur.spread);
   const spreadClass = cur.spread < 1 ? "spread-ok" : cur.spread < 2.5 ? "spread-mid" : "spread-bad";
+  // Confidence is an agreement metric — meaningless for a single source
+  const nTempSources = cur.perModel.filter((m) => m.temp != null).length;
   const confPct = Math.round((cur.confidence || 0) * 100);
   const confClass = confPct >= 80 ? "spread-ok" : confPct >= 50 ? "spread-mid" : "spread-bad";
   meta.textContent = "";
   const confSpan = document.createElement("span");
-  confSpan.innerHTML = `${escapeHtml(t("confidence"))}: <b class="${confClass}">${confPct}%</b>`;
+  confSpan.innerHTML = nTempSources >= 2
+    ? `${escapeHtml(t("confidence"))}: <b class="${confClass}">${confPct}%</b>`
+    : `${escapeHtml(t("confidence"))}: <b>—</b>`;
   const spreadSpan = document.createElement("span");
   spreadSpan.innerHTML = `${escapeHtml(t("spread"))}: <b class="${spreadClass}">\u00B1${(spreadDisp / 2).toFixed(1)}\u00B0${ul}</b>`;
   meta.append(confSpan, spreadSpan);
@@ -1802,7 +1835,7 @@ function renderTiles(cur) {
   const tiles = document.getElementById("tiles");
   const data = [
     { icon: "\uD83D\uDCA7", label: t("humidity"), value: cur.humidity != null ? cur.humidity.toFixed(0) : "\u2014", unit: "%" },
-    { icon: "\uD83D\uDCA8", label: t("wind"), value: cur.wind != null ? cur.wind.toFixed(1) : "\u2014", unit: `m/s ${windDir(cur.windDir)}` },
+    { icon: "\uD83D\uDCA8", label: t("wind"), value: cur.wind != null ? cur.wind.toFixed(1) : "\u2014", unit: `m/s${cur.windDir != null ? " " + windDir(cur.windDir) : ""}` },
     { icon: "\uD83D\uDCCA", label: t("pressure"), value: cur.pressure != null ? cur.pressure.toFixed(0) : "\u2014", unit: "hPa" },
     { icon: "\u2601\uFE0F", label: t("clouds"), value: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : "\u2014", unit: "%" },
   ];
@@ -1867,10 +1900,14 @@ function renderDaily(daily) {
   grid.innerHTML = daily.slice(0, state.chartDays).map((d, i) => {
     const w = getWmo(d.weather_code);
     const today = i === 0;
+    // Localize at render time so a language switch never needs re-aggregation
+    const dt = new Date(d.date + "T12:00:00");
+    const dayName = dt.toLocaleDateString(currentLang, { weekday: "short" });
+    const month = dt.toLocaleDateString(currentLang, { month: "short" });
     return `
       <div class="day-card ${today ? "today" : ""}">
-        <div class="day-name">${today ? t("today") : d.dayName}</div>
-        <div class="day-date">${d.month} ${d.dayNum}</div>
+        <div class="day-name">${today ? t("today") : dayName}</div>
+        <div class="day-date">${month} ${dt.getDate()}</div>
         <div class="day-emoji">${w.icon}</div>
         <div class="day-desc">${w.desc}</div>
         <div class="day-temps">
@@ -1889,9 +1926,10 @@ function renderDaily(daily) {
 function renderFooter() {
   const footer = document.getElementById("app-footer");
   let html = `<div class="footer-title">${t("data_sources")}</div>`;
-  const allSrc = [...Object.entries(MODELS).map(([k, m]) => m), MET_NORWAY, WTTR];
-  if (getApiKey("tomorrow")) allSrc.push(TOMORROW_IO);
-  if (getApiKey("owm")) allSrc.push(OWM);
+  const allSrc = [
+    ...Object.values(MODELS),
+    ...INDEPENDENT_SOURCES.filter((s) => !s.keyName || getApiKey(s.keyName)).map((s) => s.cfg),
+  ];
   for (const m of allSrc) {
     html += `<div class="footer-model">
       <span class="footer-dot" style="background:${m.color}"></span>
@@ -1910,11 +1948,11 @@ function renderFooter() {
   footer.innerHTML = html;
 }
 
-function renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
-  renderHeader(agg, openMeteoResults, wttrResult, metNorwayResult, loc);
+function renderAll(agg) {
+  renderHeader(agg);
   renderHero(agg.current);
   renderTiles(agg.current);
-  buildChart(agg);
+  renderChart(agg);
   renderChartLegend(agg);
   renderDaily(agg.daily);
   renderFooter();
@@ -1926,7 +1964,7 @@ function renderAll(agg, openMeteoResults, wttrResult, metNorwayResult, loc) {
 // ── Settings Modal ───────────────────────────────────────────────────
 function settingsStatus(provider) {
   const statusId = provider === "tomorrow" ? "status-tomorrow" : "status-owm";
-  const result = provider === "tomorrow" ? state.tomorrowResult : state.owmResult;
+  const result = state.indepResults[provider === "tomorrow" ? "tomorrow_io" : "owm"];
   const st = document.getElementById(statusId);
   const hasKey = !!getApiKey(provider);
   if (hasKey && result && !result.ok && !result.noKey) {
@@ -2005,8 +2043,9 @@ function scheduleRender(onFirstSuccess) {
     rerenderScheduled = false;
     const agg = aggregateAll(state);
     if (!agg) return;
+    state.lastAgg = agg;
     if (onFirstSuccess) onFirstSuccess();
-    renderAll(agg, state.openMeteoResults || [], state.wttrResult, state.metNorwayResult, state.loc);
+    renderAll(agg);
   });
 }
 
@@ -2014,16 +2053,13 @@ function scheduleRender(onFirstSuccess) {
 // resolves — so a single slow provider (wttr.in, met.no, …) never blocks the
 // rest of the UI. Returns a promise that resolves once every source has either
 // returned or timed out.
-function fetchAllProgressive(loc, { onFirstSuccess, onPartialUpdate } = {}) {
+function fetchAllProgressive(loc, { onFirstSuccess } = {}) {
   // Reset Open-Meteo results so per-source updates can patch them in place.
   const modelKeys = Object.keys(MODELS);
   const openMeteoResults = modelKeys.map((key) => ({ key, data: null, ok: false, pending: true }));
   state.openMeteoResults = openMeteoResults;
 
-  const update = () => {
-    if (onPartialUpdate) onPartialUpdate();
-    scheduleRender(onFirstSuccess);
-  };
+  const update = () => scheduleRender(onFirstSuccess);
 
   const tasks = [];
   for (let i = 0; i < modelKeys.length; i++) {
@@ -2033,16 +2069,16 @@ function fetchAllProgressive(loc, { onFirstSuccess, onPartialUpdate } = {}) {
       update();
     }));
   }
-  tasks.push(fetchWttrIn(loc.lat, loc.lon).then((r) => { state.wttrResult = r; update(); }));
-  tasks.push(fetchMetNorway(loc.lat, loc.lon).then((r) => { state.metNorwayResult = r; update(); }));
-  tasks.push(fetchTomorrowIo(loc.lat, loc.lon).then((r) => {
-    if (r.ok || !state.tomorrowResult?.ok) state.tomorrowResult = r;
-    update();
-  }));
-  tasks.push(fetchOWM(loc.lat, loc.lon).then((r) => {
-    if (r.ok || !state.owmResult?.ok) state.owmResult = r;
-    update();
-  }));
+  for (const src of INDEPENDENT_SOURCES) {
+    tasks.push(src.fetch(loc.lat, loc.lon).then((r) => {
+      // Uniform refresh policy for every independent source: a transient
+      // failure keeps the last good data, but a noKey result always replaces
+      // it so a removed API key drops the source immediately.
+      const prev = state.indepResults[src.key];
+      if (r.ok || r.noKey || !prev?.ok) state.indepResults[src.key] = r;
+      update();
+    }));
+  }
 
   return Promise.all(tasks);
 }
@@ -2126,7 +2162,14 @@ async function main() {
     document.getElementById("app").style.display = "block";
   };
 
-  await fetchAllProgressive(loc, { onFirstSuccess: hideLoader });
+  // Guard the initial load with the same flag refresh() uses, so a Refresh
+  // click mid-load can't spawn a second fetch that detaches the results array.
+  isRefreshing = true;
+  try {
+    await fetchAllProgressive(loc, { onFirstSuccess: hideLoader });
+  } finally {
+    isRefreshing = false;
+  }
   state.lastFetchTime = Date.now();
 
   // Final pass: either render with full data, or show the error screen if
@@ -2139,6 +2182,7 @@ async function main() {
     err.textContent = t("sources_failed");
     return;
   }
+  state.lastAgg = agg;
   hideLoader();
   scheduleRender();
 }
