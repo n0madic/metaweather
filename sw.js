@@ -1,9 +1,9 @@
 // IMPORTANT: bump version on every deployment
-const CACHE = "metaweather-v5";
+const CACHE = "metaweather-v6";
 // Chart.js is required for the app to render at all — precache it so the
 // installed PWA keeps working offline. Keep the version in sync with the
 // <script src> in index.html.
-const CHART_JS = "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js";
+const CHART_JS = "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js";
 const STATIC = ["./", "index.html", "manifest.json", "icon.svg", CHART_JS];
 
 self.addEventListener("install", (e) => {
